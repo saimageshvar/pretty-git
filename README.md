@@ -50,9 +50,52 @@ checkout
 ./pretty-git checkout feature/x
 ```
 
+Updating existing parent metadata
+
+By default `pretty-git checkout` will not overwrite an existing recorded parent for a branch to avoid accidental metadata loss. Use `--update-parent` when you intentionally want to change the recorded parent for an existing branch. When overwriting, the previous value is saved automatically under the repo-local git config key `pretty-git.parent.backup.<branch>` so you can inspect or restore it if needed.
+
+Examples:
+
+```bash
+# Overwrite recorded parent for an existing branch (interactive confirmation)
+./pretty-git checkout feature --update-parent
+
+# Overwrite and skip confirmation
+./pretty-git checkout feature --update-parent --yes
+
+# Inspect backup value saved when overwriting
+git config --get pretty-git.parent.backup.feature
+```
+
 Flags
 - `-b`, `--create` : create a new branch (wrapper for `git checkout -b`).
 - `--parent` : explicitly specify parent branch when creating.
+- `--update-parent` : when switching to an existing branch, update its recorded parent metadata (must be explicit to overwrite).
+- `-y`, `--yes` : assume yes for confirmations when updating parent metadata.
+
+set-parent
+- Set or update the recorded parent for the current branch (or a named branch).
+
+By design you can set the parent at branch creation time, or later using the `set-parent` command. When called with a single argument the command sets the parent for the current branch; when called with two arguments it sets the parent for the named branch.
+
+Examples:
+
+```bash
+# Set parent for the current branch to 'base' (interactive confirmation if a parent already exists)
+./pretty-git set-parent base
+
+# Set parent for a named branch and skip confirmation
+./pretty-git set-parent feature base --yes
+
+# Set parent for a named branch explicitly
+./pretty-git set-parent feature base
+
+# Inspect backup (previous value saved when overwriting):
+git config --get pretty-git.parent.backup.feature
+```
+
+Flags for `set-parent`:
+- `-y`, `--yes` : assume yes for confirmations when updating an existing parent.
 
 branches
 - Render recorded parent→child tree. Current branch is highlighted (green + bullet). Example output:

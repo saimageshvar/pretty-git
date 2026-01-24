@@ -22,6 +22,7 @@ func Execute() error {
 
     root.AddCommand(NewCheckoutCmd())
     root.AddCommand(NewBranchesCmd())
+    root.AddCommand(NewSetParentCmd())
 
     return root.Execute()
 }

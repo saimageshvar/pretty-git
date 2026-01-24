@@ -40,6 +40,17 @@ func GetCurrentBranch() (string, error) {
 
 // SetParent writes pretty-git.parent.<child> in local git config
 func SetParent(child, parent string) error {
+    // if a parent already exists for this child, create a simple backup
+    if existing, ok, err := GetParent(child); err != nil {
+        return err
+    } else if ok {
+        // store previous value under pretty-git.parent.backup.<child>
+        _, _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("pretty-git.parent.backup.%s", child), existing)
+        if err != nil {
+            return err
+        }
+    }
+
     _, _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("pretty-git.parent.%s", child), parent)
     return err
 }
