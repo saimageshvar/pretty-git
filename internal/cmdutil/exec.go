@@ -7,8 +7,8 @@ import (
     "strings"
 )
 
-// RunGit runs a git command and returns stdout, stderr, and error.
-func RunGit(args ...string) (string, string, error) {
+// RunGit runs a git command and returns stdout, stderr, exit code, and error.
+func RunGit(args ...string) (string, string, int, error) {
     cmd := exec.Command("git", args...)
     var stdout bytes.Buffer
     var stderr bytes.Buffer
@@ -20,10 +20,11 @@ func RunGit(args ...string) (string, string, error) {
     se := strings.TrimSpace(stderr.String())
     if err != nil {
         if exitErr, ok := err.(*exec.ExitError); ok {
-            return so, se, fmt.Errorf("git %v: exit %d: %s", args, exitErr.ExitCode(), se)
+            code := exitErr.ExitCode()
+            return so, se, code, fmt.Errorf("git %v: exit %d: %s", args, code, se)
         }
-        return so, se, fmt.Errorf("git %v: %w", args, err)
+        return so, se, -1, fmt.Errorf("git %v: %w", args, err)
     }
 
-    return so, se, nil
+    return so, se, 0, nil
 }

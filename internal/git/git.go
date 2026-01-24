@@ -9,7 +9,7 @@ import (
 
 // ListBranches returns local branch names
 func ListBranches() ([]string, error) {
-    out, _, err := cmdutil.RunGit("for-each-ref", "refs/heads", "--format=%(refname:short)")
+    out, _, _, err := cmdutil.RunGit("for-each-ref", "refs/heads", "--format=%(refname:short)")
     if err != nil {
         return nil, err
     }
@@ -27,7 +27,7 @@ func ListBranches() ([]string, error) {
 
 // GetCurrentBranch returns the current branch name or error if detached
 func GetCurrentBranch() (string, error) {
-    out, _, err := cmdutil.RunGit("rev-parse", "--abbrev-ref", "HEAD")
+    out, _, _, err := cmdutil.RunGit("rev-parse", "--abbrev-ref", "HEAD")
     if err != nil {
         return "", err
     }
@@ -40,15 +40,19 @@ func GetCurrentBranch() (string, error) {
 
 // SetParent writes pretty-git.parent.<child> in local git config
 func SetParent(child, parent string) error {
-    _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("pretty-git.parent.%s", child), parent)
+    _, _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("pretty-git.parent.%s", child), parent)
     return err
 }
 
 // AllParents reads all pretty-git.parent.* entries and returns map[child]=parent
 func AllParents() (map[string]string, error) {
-    out, stderr, err := cmdutil.RunGit("config", "--local", "--get-regexp", "^pretty-git\\.parent\\.")
+    out, stderr, code, err := cmdutil.RunGit("config", "--local", "--get-regexp", "^pretty-git\\.parent\\.")
     if err != nil {
-        // if no entries exist, git returns non-zero and stderr contains 'no matching'
+        // git returns exit code 1 when no matches are found; treat as empty
+        if code == 1 {
+            return map[string]string{}, nil
+        }
+        // if stderr contains known messages also tolerate
         if strings.Contains(stderr, "no matching") || strings.Contains(stderr, "No such file or directory") {
             return map[string]string{}, nil
         }
@@ -81,10 +85,9 @@ func AllParents() (map[string]string, error) {
 
 // GetParent returns parent of a child if set
 func GetParent(child string) (string, bool, error) {
-    out, _, err := cmdutil.RunGit("config", "--local", "--get", fmt.Sprintf("pretty-git.parent.%s", child))
+    out, _, code, err := cmdutil.RunGit("config", "--local", "--get", fmt.Sprintf("pretty-git.parent.%s", child))
     if err != nil {
-        // treat not-found as not present
-        if strings.Contains(err.Error(), "exit 1") {
+        if code == 1 {
             return "", false, nil
         }
         return "", false, err
@@ -96,12 +99,12 @@ func GetParent(child string) (string, bool, error) {
 func CheckoutBranch(branch string, create bool, parent string) error {
     if create {
         if parent != "" {
-            _, _, err := cmdutil.RunGit("checkout", "-b", branch, parent)
+            _, _, _, err := cmdutil.RunGit("checkout", "-b", branch, parent)
             return err
         }
-        _, _, err := cmdutil.RunGit("checkout", "-b", branch)
+        _, _, _, err := cmdutil.RunGit("checkout", "-b", branch)
         return err
     }
-    _, _, err := cmdutil.RunGit("checkout", branch)
+    _, _, _, err := cmdutil.RunGit("checkout", branch)
     return err
 }

@@ -1,0 +1,40 @@
+# Binaries
+/pretty-git
+/*.exe
+/*.dll
+/*.so
+/*.dylib
+
+# Build outputs
+/bin/
+/obj/
+/out/
+
+# Vendor
+/vendor/
+
+# Test and coverage
+*.test
+coverage.out
+
+# Go modules - keep go.sum committed
+# IDEs and editors
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+*~
+*.swp
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+
+# Generated directories
+dist/
+build/
