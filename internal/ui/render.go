@@ -9,7 +9,9 @@ import (
 )
 
 // RenderBranchesTree builds an ASCII tree of branches from parent metadata and highlights the current branch.
-func RenderBranchesTree(parents map[string]string, current string) (string, error) {
+// compact: uses narrower indents and connectors.
+// verbose: include parent metadata inline for each branch.
+func RenderBranchesTree(parents map[string]string, current string, compact bool, verbose bool) (string, error) {
     // get full branch list
     branches, err := git.ListBranches()
     if err != nil {
@@ -27,7 +29,7 @@ func RenderBranchesTree(parents map[string]string, current string) (string, erro
         p := parents[b]
         if p == "" {
             // no parent metadata
-            children[""] = append(children[""] , b)
+            children[""] = append(children[""], b)
             continue
         }
         children[p] = append(children[p], b)
@@ -38,11 +40,23 @@ func RenderBranchesTree(parents map[string]string, current string) (string, erro
         sort.Strings(children[k])
     }
 
-    // roots are children[""] (no recorded parent) plus any parent names that exist but not children of others
+    // roots are children[""] (no recorded parent)
     roots := children[""]
     sort.Strings(roots)
 
     var lines []string
+
+    // choose connectors and indents for compact mode
+    connectorMid := "├── "
+    connectorLast := "└── "
+    indentVert := "│   "
+    indentBlank := "    "
+    if compact {
+        connectorMid = "├─ "
+        connectorLast = "└─ "
+        indentVert = "│  "
+        indentBlank = "   "
+    }
 
     // recursive printer
     var printNode func(name string, prefix string, last bool)
@@ -50,13 +64,20 @@ func RenderBranchesTree(parents map[string]string, current string) (string, erro
         marker := ""
         display := name
         if name == current {
-            marker = CurrentMarker
+            marker = MarkerForCurrent()
             display = ColorCurrent(name)
         }
 
-        connector := "├── "
+        // verbose: append parent info inline if requested
+        if verbose {
+            if p := parents[name]; p != "" {
+                display = fmt.Sprintf("%s (%s)", display, p)
+            }
+        }
+
+        connector := connectorMid
         if last {
-            connector = "└── "
+            connector = connectorLast
         }
 
         if prefix == "" {
@@ -80,15 +101,15 @@ func RenderBranchesTree(parents map[string]string, current string) (string, erro
             newPrefix := prefix
             if prefix == "" {
                 if last {
-                    newPrefix = "    "
+                    newPrefix = indentBlank
                 } else {
-                    newPrefix = "│   "
+                    newPrefix = indentVert
                 }
             } else {
                 if last {
-                    newPrefix = prefix + "    "
+                    newPrefix = prefix + indentBlank
                 } else {
-                    newPrefix = prefix + "│   "
+                    newPrefix = prefix + indentVert
                 }
             }
             printNode(c, newPrefix, isLast)

@@ -9,14 +9,17 @@ Crisp context summary
 
 Refined next steps (concrete, prioritized)
 
-1) Parent-update UX (top priority)
-	- Implement `--update-parent` (or `--force-parent`) on `checkout` to allow explicitly updating parent metadata when switching to an existing branch.
-	- Behavior: explicit flag required to overwrite existing parent; prompt for confirmation unless `--yes` provided; create a simple backup of modified config entries to allow undo.
-	- Acceptance: flag implemented in `cmd/pretty-git/checkout.go`, `internal/git.SetParent` updated to support backups, and manual verification steps documented.
+1) Parent-update UX (done)
+	- Implemented `--update-parent` on `checkout` to allow explicitly updating parent metadata when switching to an existing branch.
+	- Behavior: explicit flag required to overwrite existing parent; prompts for confirmation unless `--yes` provided; previous values are backed up under `pretty-git.parent.backup.<branch>`.
+	- Acceptance: implemented in `cmd/pretty-git/checkout.go`, `internal/git.SetParent` (creates backups), added `pretty-git set-parent` command, and verification docs (`docs/VERIFY_UPDATE_PARENT.md` and `README.md`) updated.
 
-2) Renderer polish (high priority)
-	- Improve visual output: adopt `treeprint` or refine current renderer for cleaner Unicode box drawing, deterministic ordering, and compact/verbose display modes.
-	- Add theme/config hooks in `internal/ui/style.go` for markers and color toggles.
+2) Renderer polish (done)
+	- Improved visual output by refining the existing renderer in `internal/ui/render.go` rather than adding a new dependency.
+	- Implemented deterministic ordering (branches/children sorted) to ensure stable output.
+	- Added compact and verbose display modes (`--compact`, `--verbose`) to `pretty-git branches`.
+	- Added style hooks/toggles in `internal/ui/style.go` to control coloring and the current-branch marker (`--no-color`, `--no-marker`).
+	- Acceptance: renderer now produces cleaner Unicode box drawing with stable ordering, supports compact/verbose modes, and style toggles; documented in `README.md`.
 
 3) Interactive TUI (medium priority)
 	- Add `pretty-git browse` TUI (bubbletea/tcell) for interactive navigation, expand/collapse, and quick branch actions (checkout, set parent, inspect).

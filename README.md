@@ -109,6 +109,34 @@ main
 └── bugfix-1
 ```
 
+Branches flags
+- `--compact` : use a compact layout with narrower indents and connectors.
+- `--verbose` : show parent metadata inline for each branch (e.g., "feature (main)").
+- `--no-color` : disable colored output.
+- `--no-marker` : hide the current-branch marker.
+
+Examples:
+
+```bash
+# default
+./pretty-git branches
+
+# compact layout
+./pretty-git branches --compact
+
+# verbose (show parent inline)
+./pretty-git branches --verbose
+
+# compact + verbose
+./pretty-git branches --compact --verbose
+
+# disable color
+./pretty-git branches --no-color
+
+# hide current marker
+./pretty-git branches --no-marker
+```
+
 Implementation notes
 - Git commands use the system `git` via `internal/cmdutil.RunGit`.
 - Parent metadata stored with:

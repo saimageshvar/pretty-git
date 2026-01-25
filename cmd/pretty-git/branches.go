@@ -10,7 +10,12 @@ import (
 )
 
 func NewBranchesCmd() *cobra.Command {
-    return &cobra.Command{
+    var compact bool
+    var verbose bool
+        var noColor bool
+        var noMarker bool
+
+    cmd := &cobra.Command{
         Use:   "branches",
         Short: "Render branch parent→child tree",
         RunE: func(cmd *cobra.Command, args []string) error {
@@ -25,7 +30,11 @@ func NewBranchesCmd() *cobra.Command {
                 return err
             }
 
-            out, err := ui.RenderBranchesTree(parents, current)
+                // apply style toggles
+                ui.EnableColor = !noColor
+                ui.ShowCurrentMarker = !noMarker
+
+            out, err := ui.RenderBranchesTree(parents, current, compact, verbose)
             if err != nil {
                 return err
             }
@@ -34,4 +43,11 @@ func NewBranchesCmd() *cobra.Command {
             return nil
         },
     }
+
+    cmd.Flags().BoolVar(&compact, "compact", false, "use compact layout with narrower indents")
+    cmd.Flags().BoolVar(&verbose, "verbose", false, "show parent metadata inline for each branch")
+        cmd.Flags().BoolVar(&noColor, "no-color", false, "disable colored output")
+        cmd.Flags().BoolVar(&noMarker, "no-marker", false, "hide current-branch marker")
+
+    return cmd
 }
