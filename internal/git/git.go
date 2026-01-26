@@ -7,6 +7,30 @@ import (
     "pretty-git/internal/cmdutil"
 )
 
+// encodeKey replaces unsafe git config key characters.
+// Git config keys have strict character restrictions. We encode unsafe chars as dots:
+// - `/` (slash) → `.` (dot)
+// - `_` (underscore) → `.` (dot)  
+// - `~` (tilde) → `.` (dot)
+// Note: Branch names with different unsafe chars may collide (e.g., "a/b" and "a_b" both encode to "a.b").
+// To avoid collisions, branch names should avoid mixing different unsafe characters.
+// Branches with `-` (dash) are safe and not encoded.
+func encodeKey(s string) string {
+    // Replace unsafe characters with dots
+    result := strings.ReplaceAll(s, "/", ".")
+    result = strings.ReplaceAll(result, "_", ".")
+    result = strings.ReplaceAll(result, "~", ".")
+    return result
+}
+
+// decodeKey cannot fully reverse encodeKey due to collision risk.
+// Since we read git config directly by pattern matching on the original branch name,
+// we don't need to decode - the branch name is used as the key.
+func decodeKey(s string) string {
+    // No decoding needed - we use the original branch name as the key when reading.
+    return s
+}
+
 // ListBranches returns local branch names
 func ListBranches() ([]string, error) {
     out, _, _, err := cmdutil.RunGit("for-each-ref", "refs/heads", "--format=%(refname:short)")
@@ -45,13 +69,15 @@ func SetParent(child, parent string) error {
         return err
     } else if ok {
         // store previous value under pretty-git.parent.backup.<child>
-        _, _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("pretty-git.parent.backup.%s", child), existing)
+        encodedChild := encodeKey(child)
+        _, _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("pretty-git.parent.backup.%s", encodedChild), existing)
         if err != nil {
             return err
         }
     }
 
-    _, _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("pretty-git.parent.%s", child), parent)
+    encodedChild := encodeKey(child)
+    _, _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("pretty-git.parent.%s", encodedChild), parent)
     return err
 }
 
@@ -86,7 +112,8 @@ func AllParents() (map[string]string, error) {
         // key is pretty-git.parent.<child>
         const prefix = "pretty-git.parent."
         if strings.HasPrefix(key, prefix) {
-            child := strings.TrimPrefix(key, prefix)
+            encodedChild := strings.TrimPrefix(key, prefix)
+            child := decodeKey(encodedChild)
             parents[child] = val
         }
     }
@@ -96,7 +123,8 @@ func AllParents() (map[string]string, error) {
 
 // GetParent returns parent of a child if set
 func GetParent(child string) (string, bool, error) {
-    out, _, code, err := cmdutil.RunGit("config", "--local", "--get", fmt.Sprintf("pretty-git.parent.%s", child))
+    encodedChild := encodeKey(child)
+    out, _, code, err := cmdutil.RunGit("config", "--local", "--get", fmt.Sprintf("pretty-git.parent.%s", encodedChild))
     if err != nil {
         if code == 1 {
             return "", false, nil

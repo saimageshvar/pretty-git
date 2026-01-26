@@ -6,6 +6,7 @@ Crisp context summary
   - `internal/cmdutil.RunGit` returns (stdout, stderr, exitCode, error) so callers can distinguish non-zero git exits (e.g., `git config --get-regexp` returns exit 1 when no matches).
   - `internal/git.AllParents()` treats git exit code 1 as "no entries".
   - Worktrees are intentionally out of scope for the MVP.
+  - A temporary project to test the commands is set up at `/tmp/pg-test`. Use it to test the commands
 
 Refined next steps (concrete, prioritized)
 
@@ -21,8 +22,13 @@ Refined next steps (concrete, prioritized)
 	- Added style hooks/toggles in `internal/ui/style.go` to control coloring and the current-branch marker (`--no-color`, `--no-marker`).
 	- Acceptance: renderer now produces cleaner Unicode box drawing with stable ordering, supports compact/verbose modes, and style toggles; documented in `README.md`.
 
-3) Interactive TUI (medium priority)
-	- Add `pretty-git browse` TUI (bubbletea/tcell) for interactive navigation, expand/collapse, and quick branch actions (checkout, set parent, inspect).
+3) Interactive TUI (done)
+	- Implemented `pretty-git browse` TUI using bubbletea for interactive navigation, expand/collapse, and quick branch actions.
+	- Features: keyboard navigation (↑/↓/k/j), Space toggle for expand/collapse, Enter to checkout, 'i' to inspect metadata, 'p' to set parent, 'q' to quit.
+	- Tree display with visual indicators (▼ expanded, ► collapsed), current branch highlight (green + bullet).
+	- Full error handling: checkout failures show error message, TUI remains responsive for retry/alternative actions.
+	- Character support: branch names with `/`, `_`, `-` all work via dot encoding in git config keys.
+	- Acceptance: `pretty-git browse` command fully functional, tested and working correctly.
 
 4) Branch filtering, grouping & config (medium priority)
 	- Add flags to `branches` for prefix/regex filtering, subtree focus, and grouping by remote/upstream.

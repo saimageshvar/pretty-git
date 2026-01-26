@@ -3,8 +3,9 @@
 Small CLI to visualize git branch parent→child trees and record parent metadata on branch creation.
 
 Status
-- MVP implemented: `checkout` (wrapper) and `branches` (renderer).
+- MVP implemented: `checkout` (wrapper), `branches` (static renderer), and `browse` (interactive TUI).
 - Metadata recorded in repository-local git config keys under `pretty-git.parent.<branch>`.
+- Branch names with slashes (e.g., `feature/login`) are encoded to `.` in git config keys for compatibility.
 - Core files: `cmd/pretty-git/*`, `internal/{git,ui,cmdutil}/*`.
 
 Build
@@ -34,6 +35,7 @@ Run the binary to see help and commands:
 ./pretty-git --help
 ./pretty-git checkout --help
 ./pretty-git branches --help
+./pretty-git browse --help
 ```
 
 checkout
@@ -137,6 +139,30 @@ Examples:
 ./pretty-git branches --no-marker
 ```
 
+browse
+- Launch an interactive terminal UI (TUI) for navigating and managing branches. Provides a dynamic tree view with keyboard navigation, expand/collapse, and quick actions.
+
+Controls:
+- `↑/k`, `↓/j` : Navigate up/down through branches
+- `Space` : Toggle expand/collapse on parent nodes
+- `Enter` : Checkout the selected branch
+- `p` : Set parent for the selected branch
+- `i` : Inspect branch metadata (parent, backup info)
+- `q`, `Ctrl+C` : Quit the TUI
+
+Example:
+
+```bash
+# Launch the interactive TUI
+./pretty-git browse
+```
+
+The TUI displays:
+- Current branch highlighted in green with a bullet marker (•)
+- Tree structure with expand/collapse indicators (▼/►)
+- Status bar showing selected branch and its parent metadata
+- Keyboard-driven navigation for efficient branch management
+
 Implementation notes
 - Git commands use the system `git` via `internal/cmdutil.RunGit`.
 - Parent metadata stored with:
@@ -145,8 +171,11 @@ Implementation notes
 git config --local pretty-git.parent.<child> <parent>
 ```
 
-- `internal/cmdutil.RunGit` now returns stdout, stderr, exit code, and error so callers can treat `git config --get-regexp` exit code 1 as "no matches" (empty metadata).
-- Renderer implemented in `internal/ui/render.go` and coloring in `internal/ui/style.go` (uses `github.com/fatih/color`).
+- Branch names containing `/` are encoded as `.` in git config keys (e.g., `feature/login` → `pretty-git.parent.feature.login`) for compatibility with git config key restrictions.
+- `internal/cmdutil.RunGit` returns stdout, stderr, exit code, and error so callers can treat `git config --get-regexp` exit code 1 as "no matches" (empty metadata).
+- Renderer implemented in `internal/ui/render.go` for static display and `internal/ui/tui.go` for interactive TUI using bubbletea.
+- Coloring in `internal/ui/style.go` (uses `github.com/fatih/color`).
+- Interactive TUI in `cmd/pretty-git/browse.go` uses bubbletea (`github.com/charmbracelet/bubbletea`).
 
 Future work / contributions
 - Add `goreleaser.yml` and native packaging (nfpm) for releases.
