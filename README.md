@@ -1,12 +1,14 @@
 # pretty-git — developer README
 
-Small CLI to visualize git branch parent→child trees and record parent metadata on branch creation.
+Small CLI to visualize git branch parent→child trees and record parent metadata on branch creation. All output is aesthetically refined with status indicators, coloring, and interactive features.
 
 Status
-- MVP implemented: `checkout` (wrapper), `branches` (static renderer), and `browse` (interactive TUI).
-- Metadata recorded in repository-local git config keys under `pretty-git.parent.<branch>`.
-- Branch names with slashes (e.g., `feature/login`) are encoded to `.` in git config keys for compatibility.
+- **Complete**: `checkout` (wrapper with parent metadata), `branches` (static renderer with status indicators), and `browse` (interactive TUI).
+- Metadata recorded in repository-local git config under `branch.<branch>.pretty-git-parent`.
+- Branch names with special characters (/, _, -, ~) work transparently - no encoding needed.
+- **Status indicators** integrated throughout: merged, ahead/behind, diverged, tracking, stale detection.
 - Core files: `cmd/pretty-git/*`, `internal/{git,ui,cmdutil}/*`.
+
 
 Build
 
@@ -100,15 +102,32 @@ Flags for `set-parent`:
 - `-y`, `--yes` : assume yes for confirmations when updating an existing parent.
 
 branches
-- Render recorded parent→child tree. Current branch is highlighted (green + bullet). Example output:
+- Render recorded parent→child tree with status indicators. Current branch is highlighted (green + ● marker). Shows merge status relative to parent branch.
+
+Status indicators:
+- `✓` = branch merged into its parent
+- `↑ N` = N commits ahead of upstream
+- `↓ N` = N commits behind upstream
+- `↔ N↑M↓` = diverged (N ahead, M behind)
+- `◇` = tracking upstream
+- `⚡ Nd` = stale (no activity for >30 days)
+
+Example output (default):
 
 ```
-main
-├── feature-1
-│   ├── task-1
-│   └── task-2
-│       └── • task-2-subtask-1
-└── bugfix-1
+● master
+└─ parent1 [✓]
+   └─ parent1-child1 [✓]
+      └─ parent1-child2 [✓]
+```
+
+Example output (verbose):
+
+```
+● master
+└─ parent1 [✓] (master)
+   └─ parent1-child1 [✓] (parent1)
+      └─ parent1-child2 [✓] (parent1-child1)
 ```
 
 Branches flags
@@ -120,7 +139,7 @@ Branches flags
 Examples:
 
 ```bash
-# default
+# default (with status markers)
 ./pretty-git branches
 
 # compact layout
@@ -139,12 +158,16 @@ Examples:
 ./pretty-git branches --no-marker
 ```
 
+Important: Merge status (`✓`) checks if the branch is merged into its **direct parent branch** (from metadata), not into main/master. This correctly differentiates between:
+- A branch newly checked out from its parent (no `✓`)
+- A branch whose commits have been merged into its parent (`✓`)
+
 browse
-- Launch an interactive terminal UI (TUI) for navigating and managing branches. Provides a dynamic tree view with keyboard navigation, expand/collapse, and quick actions.
+- Launch an interactive terminal UI (TUI) for navigating and managing branches. Provides a dynamic tree view with keyboard navigation, expand/collapse, and quick actions. Displays status indicators inline with tree guide lines matching the static `branches` output.
 
 Controls:
 - `↑/k`, `↓/j` : Navigate up/down through branches
-- `Space` : Toggle expand/collapse on parent nodes
+- `Space` : Toggle expand/collapse on parent nodes (▶ = collapsed, ▼ = expanded)
 - `Enter` : Checkout the selected branch
 - `p` : Set parent for the selected branch
 - `i` : Inspect branch metadata (parent, backup info)
@@ -158,10 +181,13 @@ Example:
 ```
 
 The TUI displays:
-- Current branch highlighted in green with a bullet marker (•)
-- Tree structure with expand/collapse indicators (▼/►)
+- Current branch highlighted in green with a ● marker
+- Tree structure with box-drawing guide lines (├─, └─, │) showing nesting depth and sibling relationships
+- Expand/collapse indicators (▼ = expanded, ▶ = collapsed) with clear visual distinction from tree connectors
+- Status markers inline: merged (✓), ahead/behind (↑/↓/↔), tracking (◇), stale (⚡)
 - Status bar showing selected branch and its parent metadata
 - Keyboard-driven navigation for efficient branch management
+
 
 Implementation notes
 - Git commands use the system `git` via `internal/cmdutil.RunGit`.
@@ -173,20 +199,25 @@ git config --local pretty-git.parent.<child> <parent>
 
 - Branch names containing `/` are encoded as `.` in git config keys (e.g., `feature/login` → `pretty-git.parent.feature.login`) for compatibility with git config key restrictions.
 - `internal/cmdutil.RunGit` returns stdout, stderr, exit code, and error so callers can treat `git config --get-regexp` exit code 1 as "no matches" (empty metadata).
+- **Status detection** (`internal/git/git.go`): `GetBranchStatus()` checks merge status against **direct parent** (not main), detects ahead/behind via `git rev-list`, and checks staleness by comparing commit timestamp with current time (>30 days = stale).
+- **Coloring** (`internal/ui/style.go`): Current branch is bright green; merged branches are dim/gray; stale branches are yellow; everything else uses terminal default color (works in all color schemes).
+- **Expand/collapse indicators** (`internal/ui/tui.go`): ▼ for expanded, ▶ for collapsed (triangles provide clear visual distinction from tree connectors).
 - Renderer implemented in `internal/ui/render.go` for static display and `internal/ui/tui.go` for interactive TUI using bubbletea.
-- Coloring in `internal/ui/style.go` (uses `github.com/fatih/color`).
 - Interactive TUI in `cmd/pretty-git/browse.go` uses bubbletea (`github.com/charmbracelet/bubbletea`).
 
 Future work / contributions
 - Add `goreleaser.yml` and native packaging (nfpm) for releases.
 - Add tests for `internal/git` and `internal/ui` functions.
-- Add option to update parent metadata when switching to an existing branch.
+- Implement branch filtering, grouping by remote/upstream, and configuration persistence.
 - Support worktrees (currently out of scope).
+- Optional: Add migration tool to convert existing `pretty-git.parent.*` entries to new `branch.<branch>.pretty-git-parent` format.
 
 Development workflow
 
-1. Make edits, run `go build` and run `./pretty-git branches` to verify.
-2. If adding new dependencies run `go mod tidy` and commit `go.sum`.
+1. Make edits, run `go build` and run `./pretty-git branches` to verify output.
+2. Test with `./pretty-git browse` for interactive verification.
+3. Use `/tmp/pg-test` as a test repository or create fresh test repos to verify status detection.
+4. If adding new dependencies run `go mod tidy` and commit `go.sum`.
 
 Contact / Maintainer
  - Project scaffolded locally. See git history for commits.

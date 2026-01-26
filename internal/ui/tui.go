@@ -238,10 +238,12 @@ func (m *Model) View() string {
 			marker = "   "
 		}
 
-		display := node.Name
-		if node.Name == m.Current {
-			display = ColorCurrent(node.Name)
-		}
+		// Get status for this branch
+		parentBranch := m.Parents[node.Name]
+		status := git.GetBranchStatus(node.Name, parentBranch)
+
+		display := GetBranchDisplay(node.Name, node.Name == m.Current, status)
+		statusStr := GetStatusMarkers(status)
 
 		// Show expand indicator if has children
 		expandChar := "  "
@@ -249,11 +251,11 @@ func (m *Model) View() string {
 			if node.Expanded {
 				expandChar = "▼ "
 			} else {
-				expandChar = "► "
+				expandChar = "▶ "
 			}
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s%s%s\n", marker, prefix, expandChar, display))
+		sb.WriteString(fmt.Sprintf("%s%s%s%s%s\n", marker, prefix, expandChar, display, statusStr))
 	}
 
 	sb.WriteString("\n─────────────────────────────────────────\n")
@@ -273,22 +275,52 @@ func (m *Model) View() string {
 	return sb.String()
 }
 
-// getTreePrefix calculates the tree prefix (indentation + connectors)
+// getTreePrefix calculates the tree prefix with connectors showing nesting structure
+// Uses box-drawing characters (├─, └─, │) to match the static branches output
 func (m *Model) getTreePrefix(node *BranchNode) string {
-	// Simple depth calculation: count from root
-	depth := m.getDepth(m.Root, node, 0)
-	indent := strings.Repeat("  ", depth)
-	return indent
-}
+	path := m.getPathToNode(m.Root, node)
+	if len(path) == 0 {
+		return ""
+	}
 
-func (m *Model) getDepth(parent *BranchNode, target *BranchNode, d int) int {
-	for _, child := range parent.Children {
-		if child == target {
-			return d + 1
-		}
-		if found := m.getDepth(child, target, d+1); found > 0 {
-			return found
+	var prefix string
+	// path[0] is always Root, skip it
+	for i := 1; i < len(path); i++ {
+		parent := path[i-1]
+		current := path[i]
+		isLast := current == parent.Children[len(parent.Children)-1]
+
+		if i == len(path)-1 {
+			// Last node in path: use connector
+			if isLast {
+				prefix += "└─ "
+			} else {
+				prefix += "├─ "
+			}
+		} else {
+			// Intermediate node: use vertical line or blank
+			if isLast {
+				prefix += "   "
+			} else {
+				prefix += "│  "
+			}
 		}
 	}
-	return 0
+
+	return prefix
+}
+
+// getPathToNode returns the path from root to the target node
+func (m *Model) getPathToNode(parent *BranchNode, target *BranchNode) []*BranchNode {
+	if parent == target {
+		return []*BranchNode{parent}
+	}
+
+	for _, child := range parent.Children {
+		if path := m.getPathToNode(child, target); len(path) > 0 {
+			return append([]*BranchNode{parent}, path...)
+		}
+	}
+
+	return nil
 }
