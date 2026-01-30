@@ -113,6 +113,66 @@ func GetParent(child string) (string, bool, error) {
 	return strings.TrimSpace(out), true, nil
 }
 
+// SetDescription writes branch.<branch>.pretty-git-description in local git config
+func SetDescription(branch, description string) error {
+	_, _, _, err := cmdutil.RunGit("config", "--local", fmt.Sprintf("branch.%s.pretty-git-description", branch), description)
+	return err
+}
+
+// GetDescription returns description of a branch if set
+func GetDescription(branch string) (string, bool, error) {
+	out, _, code, err := cmdutil.RunGit("config", "--local", "--get", fmt.Sprintf("branch.%s.pretty-git-description", branch))
+	if err != nil {
+		if code == 1 {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return strings.TrimSpace(out), true, nil
+}
+
+// AllDescriptions reads all branch.<branch>.pretty-git-description entries and returns map[branch]=description
+func AllDescriptions() (map[string]string, error) {
+	out, stderr, code, err := cmdutil.RunGit("config", "--local", "--get-regexp", "^branch\\..*\\.pretty-git-description$")
+	if err != nil {
+		// git returns exit code 1 when no matches are found; treat as empty
+		if code == 1 {
+			return map[string]string{}, nil
+		}
+		// if stderr contains known messages also tolerate
+		if strings.Contains(stderr, "no matching") || strings.Contains(stderr, "No such file or directory") {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+
+	descriptions := map[string]string{}
+	if out == "" {
+		return descriptions, nil
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for _, l := range lines {
+		parts := strings.SplitN(l, " ", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		key := parts[0]
+		val := parts[1]
+		// key is branch.<branch>.pretty-git-description
+		const prefix = "branch."
+		const suffix = ".pretty-git-description"
+		if strings.HasPrefix(key, prefix) && strings.HasSuffix(key, suffix) {
+			// Extract branch name from "branch.BRANCH.pretty-git-description"
+			branch := strings.TrimPrefix(key, prefix)
+			branch = strings.TrimSuffix(branch, suffix)
+			descriptions[branch] = val
+		}
+	}
+
+	return descriptions, nil
+}
+
 // CheckoutBranch performs git checkout. If create is true, behaves like 'git checkout -b <branch> [parent]'
 func CheckoutBranch(branch string, create bool, parent string) error {
 	if create {

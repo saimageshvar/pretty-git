@@ -24,6 +24,12 @@ func RenderBranchesTreeWithStatus(parents map[string]string, current string, com
 		return "", err
 	}
 
+	// load descriptions
+	descriptions, err := git.AllDescriptions()
+	if err != nil {
+		return "", err
+	}
+
 	// build children map
 	children := map[string][]string{}
 	have := map[string]bool{}
@@ -115,6 +121,42 @@ func RenderBranchesTreeWithStatus(parents map[string]string, current string, com
 				lines = append(lines, fmt.Sprintf("%s%s%s%s%s", prefix, connector, marker, display, statusStr))
 			} else {
 				lines = append(lines, fmt.Sprintf("%s%s%s%s", prefix, connector, display, statusStr))
+			}
+		}
+
+		// Add description line if present
+		if desc, ok := descriptions[name]; ok && desc != "" {
+			descLine := ColorDescription(desc)
+			if depth == 0 {
+				// Root level: check if it has children to show connector
+				hasChildren := len(children[name]) > 0
+				if hasChildren {
+					lines = append(lines, "│ "+descLine)
+				} else {
+					lines = append(lines, "  "+descLine)
+				}
+			} else {
+				// Continue the tree connectors through the description line
+				// Check if this node has children to determine connector style
+				hasChildren := len(children[name]) > 0
+				var descConnector string
+
+				if hasChildren {
+					// Has children: use vertical line to continue
+					if last {
+						descConnector = prefix + indentBlank + "│  "
+					} else {
+						descConnector = prefix + indentVert + "│  "
+					}
+				} else {
+					// No children: just maintain parent's connector
+					if last {
+						descConnector = prefix + indentBlank + "   "
+					} else {
+						descConnector = prefix + indentVert + "   "
+					}
+				}
+				lines = append(lines, descConnector+descLine)
 			}
 		}
 

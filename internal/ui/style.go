@@ -51,6 +51,14 @@ func ColorDefault(s string) string {
 	return s
 }
 
+// ColorDescription returns a dimmed/subtle version for branch descriptions
+func ColorDescription(s string) string {
+	if !EnableColor {
+		return s
+	}
+	return color.New(color.FgHiBlack, color.Italic).Sprint(s)
+}
+
 // MarkerForCurrent returns the marker string if markers are enabled, otherwise empty string.
 func MarkerForCurrent() string {
 	if ShowCurrentMarker {

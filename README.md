@@ -1,12 +1,13 @@
 # pretty-git — developer README
 
-Small CLI to visualize git branch parent→child trees and record parent metadata on branch creation. All output is aesthetically refined with status indicators, coloring, and interactive features.
+Small CLI to visualize git branch parent→child trees and record parent metadata and descriptions on branch creation. All output is aesthetically refined with status indicators, coloring, and interactive features.
 
 Status
-- **Complete**: `checkout` (wrapper with parent metadata), `branches` (static renderer with status indicators), and `browse` (interactive TUI).
-- Metadata recorded in repository-local git config under `branch.<branch>.pretty-git-parent`.
+- **Complete**: `checkout` (wrapper with parent metadata and descriptions), `branches` (static renderer with status indicators and descriptions), `browse` (interactive TUI), and `set` (set parent and/or description for branches).
+- Metadata recorded in repository-local git config under `branch.<branch>.pretty-git-parent` and `branch.<branch>.pretty-git-description`.
 - Branch names with special characters (/, _, -, ~) work transparently - no encoding needed.
 - **Status indicators** integrated throughout: merged, ahead/behind, diverged, tracking, stale detection.
+- **Branch descriptions** displayed as subtle subtitle text beneath branch names in both static and interactive views.
 - Core files: `cmd/pretty-git/*`, `internal/{git,ui,cmdutil}/*`.
 
 
@@ -38,16 +39,18 @@ Run the binary to see help and commands:
 ./pretty-git checkout --help
 ./pretty-git branches --help
 ./pretty-git browse --help
+./pretty-git set --help
 ```
 
 checkout
-- Create new branch and record parent (default):
+- Create new branch and record parent and description:
 
 ```bash
 # create from current branch and record its parent
 ./pretty-git checkout -b feature/foo
 
-# create from an explicit parent
+# create from an explicit parent with description
+./pretty-git checkout -b feature/foo --parent main --desc "New feature implementation"
 ./pretty-git checkout -b feature/foo --parent main
 
 # switch to existing branch (does not modify metadata)
@@ -74,13 +77,45 @@ git config --get pretty-git.parent.backup.feature
 Flags
 - `-b`, `--create` : create a new branch (wrapper for `git checkout -b`).
 - `--parent` : explicitly specify parent branch when creating.
+- `--desc` : set description for the new branch.
 - `--update-parent` : when switching to an existing branch, update its recorded parent metadata (must be explicit to overwrite).
 - `-y`, `--yes` : assume yes for confirmations when updating parent metadata.
 
-set-parent
-- Set or update the recorded parent for the current branch (or a named branch).
+set
+- Set or update the recorded parent and/or description for a branch (defaults to current branch).
 
-By design you can set the parent at branch creation time, or later using the `set-parent` command. When called with a single argument the command sets the parent for the current branch; when called with two arguments it sets the parent for the named branch.
+The `set` command provides a unified way to manage branch metadata after branch creation. You can set parent, description, or both. When updating existing values, you'll be prompted for confirmation unless `--yes` is provided.
+
+Examples:
+
+```bash
+# Set parent for current branch
+./pretty-git set --parent main
+
+# Set description for current branch
+./pretty-git set --desc "Feature implementation"
+
+# Set both parent and description for current branch
+./pretty-git set --parent main --desc "Feature implementation"
+
+# Set parent and description for a named branch
+./pretty-git set feature-x --parent develop --desc "New feature X"
+
+# Skip confirmation when overwriting existing values
+./pretty-git set --parent main --yes
+```
+
+Flags for `set`:
+- `--parent` : parent branch to set (optional).
+- `--desc` : description to set for the branch (optional).
+- `-y`, `--yes` : assume yes for confirmations when updating existing metadata.
+
+Note: At least one of `--parent` or `--desc` must be provided.
+
+set-parent (deprecated)
+- Legacy command for setting parent only. Use `set --parent` instead.
+
+By design you can set the parent at branch creation time, or later using the `set` command. When called with a single argument the command sets the parent for the current branch; when called with two arguments it sets the parent for the named branch.
 
 Examples:
 
@@ -102,7 +137,7 @@ Flags for `set-parent`:
 - `-y`, `--yes` : assume yes for confirmations when updating an existing parent.
 
 branches
-- Render recorded parent→child tree with status indicators. Current branch is highlighted (green + ● marker). Shows merge status relative to parent branch.
+- Render recorded parent→child tree with status indicators and descriptions. Current branch is highlighted (green + ● marker). Shows merge status relative to parent branch. Descriptions are displayed as subtle subtitle text beneath each branch name.
 
 Status indicators:
 - `✓` = branch merged into its parent
@@ -112,7 +147,20 @@ Status indicators:
 - `◇` = tracking upstream
 - `⚡ Nd` = stale (no activity for >30 days)
 
-Example output (default):
+Example output (default with descriptions):
+
+```
+● master
+  Main development branch
+└─ parent1 [✓]
+   Updated feature branch description
+   └─ parent1-child1 [✓]
+      Implementation of X feature
+      └─ parent1-child2 [✓]
+         Bugfixes and improvements
+```
+
+Example output (default without descriptions):
 
 ```
 ● master
@@ -163,14 +211,14 @@ Important: Merge status (`✓`) checks if the branch is merged into its **direct
 - A branch whose commits have been merged into its parent (`✓`)
 
 browse
-- Launch an interactive terminal UI (TUI) for navigating and managing branches. Provides a dynamic tree view with keyboard navigation, expand/collapse, and quick actions. Displays status indicators inline with tree guide lines matching the static `branches` output.
+- Launch an interactive terminal UI (TUI) for navigating and managing branches. Provides a dynamic tree view with keyboard navigation, expand/collapse, and quick actions. Displays status indicators and branch descriptions inline with tree guide lines matching the static `branches` output.
 
 Controls:
 - `↑/k`, `↓/j` : Navigate up/down through branches
 - `Space` : Toggle expand/collapse on parent nodes (▶ = collapsed, ▼ = expanded)
 - `Enter` : Checkout the selected branch
 - `p` : Set parent for the selected branch
-- `i` : Inspect branch metadata (parent, backup info)
+- `i` : Inspect branch metadata (parent, description, backup info)
 - `q`, `Ctrl+C` : Quit the TUI
 
 Example:
@@ -183,6 +231,7 @@ Example:
 The TUI displays:
 - Current branch highlighted in green with a ● marker
 - Tree structure with box-drawing guide lines (├─, └─, │) showing nesting depth and sibling relationships
+- Branch descriptions displayed as subtle subtitle text beneath each branch name
 - Expand/collapse indicators (▼ = expanded, ▶ = collapsed) with clear visual distinction from tree connectors
 - Status markers inline: merged (✓), ahead/behind (↑/↓/↔), tracking (◇), stale (⚡)
 - Status bar showing selected branch and its parent metadata
@@ -194,13 +243,20 @@ Implementation notes
 - Parent metadata stored with:
 
 ```bash
-git config --local pretty-git.parent.<child> <parent>
+git config --local branch.<child>.pretty-git-parent <parent>
 ```
 
-- Branch names containing `/` are encoded as `.` in git config keys (e.g., `feature/login` → `pretty-git.parent.feature.login`) for compatibility with git config key restrictions.
+- Description metadata stored with:
+
+```bash
+git config --local branch.<branch>.pretty-git-description <description>
+```
+
+- Branch names with special characters (/, _, -, ~) work transparently in git config - no encoding needed as git handles quoted section names automatically.
 - `internal/cmdutil.RunGit` returns stdout, stderr, exit code, and error so callers can treat `git config --get-regexp` exit code 1 as "no matches" (empty metadata).
 - **Status detection** (`internal/git/git.go`): `GetBranchStatus()` checks merge status against **direct parent** (not main), detects ahead/behind via `git rev-list`, and checks staleness by comparing commit timestamp with current time (>30 days = stale).
-- **Coloring** (`internal/ui/style.go`): Current branch is bright green; merged branches are dim/gray; stale branches are yellow; everything else uses terminal default color (works in all color schemes).
+- **Coloring** (`internal/ui/style.go`): Current branch is bright green; merged branches are dim/gray; stale branches are yellow; descriptions are rendered in dim italic; everything else uses terminal default color (works in all color schemes).
+- **Description display**: Rendered as subtle subtitle text beneath branch names with proper indentation matching the tree structure.
 - **Expand/collapse indicators** (`internal/ui/tui.go`): ▼ for expanded, ▶ for collapsed (triangles provide clear visual distinction from tree connectors).
 - Renderer implemented in `internal/ui/render.go` for static display and `internal/ui/tui.go` for interactive TUI using bubbletea.
 - Interactive TUI in `cmd/pretty-git/browse.go` uses bubbletea (`github.com/charmbracelet/bubbletea`).

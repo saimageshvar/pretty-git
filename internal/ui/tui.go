@@ -25,6 +25,7 @@ type Model struct {
 	Current      string        // current branch
 	Selection    int           // index in All list
 	Parents      map[string]string
+	Descriptions map[string]string // branch descriptions
 	ErrorMsg     string
 	ActionMode   string // "" (normal), "checkout", "set-parent", "inspect"
 	ActionBranch string
@@ -34,6 +35,11 @@ type Model struct {
 // NewTUIModel creates a new TUI model
 func NewTUIModel() (*Model, error) {
 	parents, err := git.AllParents()
+	if err != nil {
+		return nil, err
+	}
+
+	descriptions, err := git.AllDescriptions()
 	if err != nil {
 		return nil, err
 	}
@@ -82,11 +88,12 @@ func NewTUIModel() (*Model, error) {
 	sortChildren(root)
 
 	m := &Model{
-		Root:       root,
-		Current:    current,
-		Parents:    parents,
-		Selection:  0,
-		ActionMode: "",
+		Root:         root,
+		Current:      current,
+		Parents:      parents,
+		Descriptions: descriptions,
+		Selection:    0,
+		ActionMode:   "",
 	}
 
 	m.rebuildFlatList()
@@ -199,7 +206,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if parent == "" {
 					parent = "(no parent)"
 				}
-				m.ErrorMsg = fmt.Sprintf("Info: %s → parent: %s", branch, parent)
+				desc := m.Descriptions[branch]
+				if desc == "" {
+					desc = "(no description)"
+				}
+				m.ErrorMsg = fmt.Sprintf("Info: %s → parent: %s | desc: %s", branch, parent, desc)
 			}
 
 		case "home":
@@ -256,6 +267,60 @@ func (m *Model) View() string {
 		}
 
 		sb.WriteString(fmt.Sprintf("%s%s%s%s%s\n", marker, prefix, expandChar, display, statusStr))
+
+		// Add description if present (on next line with tree connectors)
+		if desc, ok := m.Descriptions[node.Name]; ok && desc != "" {
+			descText := ColorDescription(desc)
+			// Use spaces instead of marker for description lines to avoid duplicate >
+			blankMarker := "   "
+
+			// Build description line with proper tree connectors
+			if prefix == "" {
+				// Root level
+				sb.WriteString(fmt.Sprintf("%s  %s\n", blankMarker, descText))
+			} else {
+				// Non-root: continue tree structure
+				// Get the tree path to understand connector placement
+				path := m.getPathToNode(m.Root, node)
+				var descPrefix string
+
+				if len(path) > 1 {
+					// Build prefix by maintaining parent connectors
+					for i := 1; i < len(path)-1; i++ {
+						parent := path[i-1]
+						current := path[i]
+						isLast := current == parent.Children[len(parent.Children)-1]
+						if isLast {
+							descPrefix += "   "
+						} else {
+							descPrefix += "│  "
+						}
+					}
+
+					// For the current node's level
+					parentNode := path[len(path)-2]
+					isLastChild := node == parentNode.Children[len(parentNode.Children)-1]
+
+					if len(node.Children) > 0 && node.Expanded {
+						// Has children: show continuation
+						if isLastChild {
+							descPrefix += "   │  "
+						} else {
+							descPrefix += "│  │  "
+						}
+					} else {
+						// No children or collapsed: just spacing
+						if isLastChild {
+							descPrefix += "      "
+						} else {
+							descPrefix += "│     "
+						}
+					}
+				}
+
+				sb.WriteString(fmt.Sprintf("%s%s%s\n", blankMarker, descPrefix, descText))
+			}
+		}
 	}
 
 	sb.WriteString("\n─────────────────────────────────────────\n")
