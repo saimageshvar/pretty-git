@@ -248,21 +248,44 @@ Flags:
 - `--chronological` : time-ordered view with inline indicators (only with `--all`)
 - `--ascii` : use ASCII symbols (^, o, v) instead of Unicode (▲, ●, ▼)
 - `--no-color` : disable colored output
+- `--max-commits <N>` : limit commits per section to N (default: 300, use 0 for unlimited)
+- `--no-pager` : disable automatic pagination (pager is enabled by default)
+- `--force-pager` : force pager to stay open even for small outputs
+
+Performance notes:
+- By default, each section is limited to 300 commits to prevent performance issues with large repositories
+- When a section is truncated, a message like "... 150 more commits" is displayed
+- Use `--max-commits=0` to disable the limit and show all commits
+- **Pager is enabled by default** and will automatically activate when output exceeds your terminal height
+- Pager uses your system's `$PAGER` variable or defaults to `less` with options for color support and auto-quit
+- Legend appears at the top for immediate visibility when paging through commits
 
 Examples:
 
 ```bash
-# Default: branch-unique commits only
+# Default: branch-unique commits only (pager auto-activates if needed)
 ./pretty-git log
 
-# Full history organized by sections
+# Full history organized by sections (with pager)
 ./pretty-git log --all
+
+# Disable pager for piping or scripts
+./pretty-git log --all --no-pager
+
+# Full history with limited commits per section
+./pretty-git log --all --max-commits=50
+
+# Full history with no limit
+./pretty-git log --all --max-commits=0
 
 # Chronological order with indicators
 ./pretty-git log --all --chronological
 
 # Detailed multiline format
 ./pretty-git log --multiline
+
+# Force pager to stay open (useful for small outputs)
+./pretty-git log --all --force-pager
 ```
 
 

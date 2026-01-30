@@ -2,6 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
 
 	"pretty-git/internal/git"
 
@@ -123,4 +127,76 @@ func joinMarkers(markers []string) string {
 		result += " " + markers[i]
 	}
 	return result
+}
+
+// DisplayWithPager pipes the output through a pager (less or more)
+// Falls back to direct output if pager is not available or fails
+// forcePager: if true, pager stays open even for small outputs (removes -F flag)
+func DisplayWithPager(content string, forcePager bool) error {
+	// Try to find a suitable pager
+	pagerCmd := os.Getenv("PAGER")
+	if pagerCmd == "" {
+		// Default to less with common options
+		pagerCmd = "less"
+	}
+
+	// Parse pager command (handle commands with arguments)
+	parts := strings.Fields(pagerCmd)
+	if len(parts) == 0 {
+		return fmt.Errorf("empty pager command")
+	}
+
+	cmdName := parts[0]
+	cmdArgs := parts[1:]
+
+	// Add default options for less if it's the pager and no args provided
+	if cmdName == "less" && len(cmdArgs) == 0 {
+		if forcePager {
+			// Force pager to stay open (no -F flag)
+			cmdArgs = []string{"-R", "-X"}
+		} else {
+			cmdArgs = []string{"-R", "-F", "-X"}
+		}
+		// -R: allow ANSI color codes
+		// -F: quit if content fits on one screen (omitted when forcePager=true)
+		// -X: don't clear screen on exit
+	}
+
+	// Check if pager exists
+	if _, err := exec.LookPath(cmdName); err != nil {
+		return fmt.Errorf("pager '%s' not found: %w", cmdName, err)
+	}
+
+	// Create the pager command
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Create a pipe to write content to pager
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
+	// Start the pager
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start pager: %w", err)
+	}
+
+	// Write content to pager
+	if _, err := io.WriteString(stdin, content); err != nil {
+		stdin.Close()
+		cmd.Wait()
+		return fmt.Errorf("failed to write to pager: %w", err)
+	}
+
+	// Close stdin to signal end of input
+	stdin.Close()
+
+	// Wait for pager to finish
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("pager exited with error: %w", err)
+	}
+
+	return nil
 }

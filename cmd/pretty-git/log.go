@@ -16,6 +16,9 @@ func NewLogCmd() *cobra.Command {
 	var noColor bool
 	var chronological bool
 	var ascii bool
+	var maxCommits int
+	var usePager bool
+	var forcePager bool
 
 	cmd := &cobra.Command{
 		Use:   "log",
@@ -59,12 +62,20 @@ Formats:
 			ui.EnableColor = !noColor
 
 			// Render the log
-			out, err := ui.RenderCommitLog(branch, parent, hasParent, showAll, multiline, chronological, ascii)
+			out, err := ui.RenderCommitLog(branch, parent, hasParent, showAll, multiline, chronological, ascii, maxCommits)
 			if err != nil {
 				return err
 			}
 
-			fmt.Print(out)
+			// Use pager by default unless --no-pager is set
+			if !usePager {
+				if err := ui.DisplayWithPager(out, forcePager); err != nil {
+					// Fallback to direct output if pager fails
+					fmt.Print(out)
+				}
+			} else {
+				fmt.Print(out)
+			}
 			return nil
 		},
 	}
@@ -74,6 +85,9 @@ Formats:
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable colored output")
 	cmd.Flags().BoolVar(&chronological, "chronological", false, "show commits in chronological order (only with --all)")
 	cmd.Flags().BoolVar(&ascii, "ascii", false, "use ASCII symbols instead of Unicode")
+	cmd.Flags().IntVar(&maxCommits, "max-commits", 300, "maximum commits per section (0 for unlimited)")
+	cmd.Flags().BoolVar(&usePager, "no-pager", false, "disable pager (pager is enabled by default)")
+	cmd.Flags().BoolVar(&forcePager, "force-pager", false, "force pager to stay open even for small outputs")
 
 	return cmd
 }
