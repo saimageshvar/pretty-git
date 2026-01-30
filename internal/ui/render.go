@@ -202,3 +202,438 @@ func RenderBranchesTreeWithStatus(parents map[string]string, current string, com
 
 	return strings.Join(lines, "\n") + "\n", nil
 }
+
+// RenderCommitLog renders commits with parent-awareness
+// branch: current branch name
+// parent: parent branch name (may be empty)
+// hasParent: whether a parent is configured
+// showAll: if true, show commits from parent; if false, only branch-unique commits
+// multiline: if true, use detailed format; if false, use oneline format
+// chronological: if true with showAll, show in time order; if false, group by relationship
+// ascii: if true, use ASCII symbols; if false, use Unicode symbols
+func RenderCommitLog(branch string, parent string, hasParent bool, showAll bool, multiline bool, chronological bool, ascii bool) (string, error) {
+	var output strings.Builder
+
+	// Show header with ahead/behind status
+	if hasParent {
+		ahead, behind, err := git.GetAheadBehindCounts(branch, parent)
+		if err != nil {
+			return "", err
+		}
+
+		header := fmt.Sprintf("Branch: %s (parent: %s)\n", ColorCurrent(branch), parent)
+		if ahead > 0 || behind > 0 {
+			status := fmt.Sprintf("Status: %d ahead, %d behind\n", ahead, behind)
+			header += status
+		}
+		output.WriteString(header)
+		output.WriteString("\n")
+	} else {
+		header := fmt.Sprintf("Branch: %s (no parent configured)\n\n", ColorCurrent(branch))
+		output.WriteString(header)
+	}
+
+	if showAll && hasParent {
+		// Show all commits with distinction between branch and parent commits
+		_, err := renderAllCommitsWithParent(branch, parent, multiline, chronological, ascii, &output)
+		if err != nil {
+			return "", err
+		}
+
+		// Add legend at the bottom
+		if chronological {
+			output.WriteString(renderLegendChronological(ascii))
+		} else {
+			output.WriteString(renderLegend(ascii))
+		}
+
+		return output.String(), nil
+	}
+
+	// Default: show only commits unique to branch
+	commits, err := git.GetCommitLog(branch, parent, true)
+	if err != nil {
+		return "", err
+	}
+
+	if len(commits) == 0 {
+		if hasParent {
+			output.WriteString("No commits unique to this branch.\n")
+			output.WriteString("(All commits are shared with parent or branch is up to date)\n")
+		} else {
+			output.WriteString("No commits found.\n")
+		}
+		return output.String(), nil
+	}
+
+	// Render commits
+	for _, commit := range commits {
+		if multiline {
+			output.WriteString(renderCommitMultiline(commit, true))
+		} else {
+			output.WriteString(renderCommitOneline(commit, true))
+		}
+	}
+
+	return output.String(), nil
+}
+
+// renderAllCommitsWithParent shows full history with visual distinction
+func renderAllCommitsWithParent(branch string, parent string, multiline bool, chronological bool, ascii bool, output *strings.Builder) (string, error) {
+	if chronological {
+		return renderAllCommitsChronological(branch, parent, multiline, output)
+	}
+	return renderAllCommitsGrouped(branch, parent, multiline, ascii, output)
+}
+
+// renderAllCommitsChronological shows commits in time order with visual distinction
+func renderAllCommitsChronological(branch string, parent string, multiline bool, output *strings.Builder) (string, error) {
+	// Get branch-only commits to identify them
+	branchCommits, err := git.GetCommitLog(branch, parent, true)
+	if err != nil {
+		return "", err
+	}
+
+	// Get parent-only commits
+	parentCommits, err := git.GetCommitLog(parent, branch, true)
+	if err != nil {
+		return "", err
+	}
+
+	// Build sets for quick lookup
+	branchHashes := make(map[string]bool)
+	for _, c := range branchCommits {
+		branchHashes[c.Hash] = true
+	}
+
+	parentHashes := make(map[string]bool)
+	for _, c := range parentCommits {
+		parentHashes[c.Hash] = true
+	}
+
+	// Get all commits in chronological order
+	allCommits, err := git.GetCommitLog(branch, "", false)
+	if err != nil {
+		return "", err
+	}
+
+	// Render all commits with distinction
+	for _, commit := range allCommits {
+		isBranchCommit := branchHashes[commit.Hash]
+		isParentCommit := parentHashes[commit.Hash]
+
+		if multiline {
+			output.WriteString(renderCommitMultilineWithIndicator(commit, isBranchCommit, isParentCommit))
+		} else {
+			output.WriteString(renderCommitOnelineWithIndicator(commit, isBranchCommit, isParentCommit))
+		}
+	}
+
+	return output.String(), nil
+}
+
+// renderAllCommitsGrouped shows commits grouped by relationship
+func renderAllCommitsGrouped(branch string, parent string, multiline bool, ascii bool, output *strings.Builder) (string, error) {
+	// Get branch-only commits
+	branchCommits, err := git.GetCommitLog(branch, parent, true)
+	if err != nil {
+		return "", err
+	}
+
+	// Determine symbols based on ascii flag
+	currentSymbol := "▲"
+	commonSymbol := "●"
+	parentSymbol := "▼"
+	if ascii {
+		currentSymbol = "^"
+		commonSymbol = "o"
+		parentSymbol = "v"
+	}
+
+	if len(branchCommits) > 0 {
+		// Show section header for branch commits
+		sectionHeader := fmt.Sprintf("%s Current branch only (%d)\n", currentSymbol, len(branchCommits))
+		output.WriteString(sectionHeader)
+
+		// Render branch-unique commits
+		for _, commit := range branchCommits {
+			if multiline {
+				output.WriteString(renderCommitMultiline(commit, true))
+			} else {
+				output.WriteString(renderCommitOneline(commit, true))
+			}
+		}
+		output.WriteString("\n")
+	}
+
+	// Get parent-only commits (commits in parent that aren't in branch yet)
+	parentCommits, err := git.GetCommitLog(parent, branch, true)
+	if err != nil {
+		return "", err
+	}
+
+	// Get shared/common commits (commits in both branches)
+	sharedCommits, err := git.GetCommitLog(parent, "", false)
+	if err != nil {
+		return "", err
+	}
+
+	// Build set of branch and parent commit hashes to identify shared commits
+	branchSet := make(map[string]bool)
+	for _, c := range branchCommits {
+		branchSet[c.Hash] = true
+	}
+	parentOnlySet := make(map[string]bool)
+	for _, c := range parentCommits {
+		parentOnlySet[c.Hash] = true
+	}
+
+	// Filter to only shared commits
+	var actualShared []*git.Commit
+	for _, c := range sharedCommits {
+		if !branchSet[c.Hash] && !parentOnlySet[c.Hash] {
+			actualShared = append(actualShared, c)
+		}
+	}
+
+	if len(actualShared) > 0 {
+		// Show section header for shared commits
+		sectionHeader := fmt.Sprintf("%s Common commits (%d)\n", commonSymbol, len(actualShared))
+		output.WriteString(sectionHeader)
+
+		for _, commit := range actualShared {
+			if multiline {
+				output.WriteString(renderCommitMultiline(commit, false))
+			} else {
+				output.WriteString(renderCommitOneline(commit, false))
+			}
+		}
+		output.WriteString("\n")
+	}
+
+	if len(parentCommits) > 0 {
+		// Show section header for parent commits
+		sectionHeader := fmt.Sprintf("%s Parent branch only (%d)\n", parentSymbol, len(parentCommits))
+		output.WriteString(sectionHeader)
+
+		for _, commit := range parentCommits {
+			if multiline {
+				output.WriteString(renderCommitMultiline(commit, false))
+			} else {
+				output.WriteString(renderCommitOneline(commit, false))
+			}
+		}
+	}
+
+	return output.String(), nil
+}
+
+// renderLegend shows the legend for grouped mode
+func renderLegend(ascii bool) string {
+	var legend string
+
+	if ascii {
+		legend = "\nLegend: ^ Current branch only | o Common commits | v Parent branch only\n"
+	} else {
+		legend = "\nLegend: \u25b2 Current branch only | \u25cf Common commits | \u25bc Parent branch only\n"
+	}
+
+	if EnableColor {
+		return ColorDescription(legend)
+	}
+	return legend
+}
+
+// renderLegendChronological shows the legend for chronological mode
+func renderLegendChronological(ascii bool) string {
+	var legend string
+
+	if ascii {
+		legend = "\nLegend: o Common commit | v Parent branch only\n"
+	} else {
+		legend = "\nLegend: \u25cf Common commit | \u25bc Parent branch only\n"
+	}
+
+	if EnableColor {
+		return ColorDescription(legend)
+	}
+	return legend
+}
+
+// renderCommitOneline renders a commit in oneline format
+// bright: if true, use bright/bold styling; if false, use dimmed styling
+func renderCommitOneline(commit *git.Commit, bright bool) string {
+	hash := commit.ShortHash
+	message := commit.Message
+
+	if bright {
+		// Bright/bold for branch-unique commits
+		if EnableColor {
+			hash = ColorCurrent(hash)
+		}
+		return fmt.Sprintf("%s  %s\n", hash, message)
+	}
+
+	// Dimmed for parent commits
+	if EnableColor {
+		hash = ColorDescription(hash)
+		message = ColorDescription(message)
+	}
+	return fmt.Sprintf("%s  %s\n", hash, message)
+}
+
+// renderCommitOnelineWithIndicator renders a commit with type indicator for chronological mode
+func renderCommitOnelineWithIndicator(commit *git.Commit, isBranch bool, isParent bool) string {
+	hash := commit.ShortHash
+	message := commit.Message
+	indicator := "  "
+
+	if isBranch {
+		// Branch-unique commit: bright, no indicator
+		if EnableColor {
+			hash = ColorCurrent(hash)
+		}
+		return fmt.Sprintf("%s%s  %s\n", indicator, hash, message)
+	} else if isParent {
+		// Parent-only commit: dimmed with ▼
+		indicator = "▼ "
+		if EnableColor {
+			hash = ColorDescription(hash)
+			message = ColorDescription(message)
+		}
+		return fmt.Sprintf("%s%s  %s\n", indicator, hash, message)
+	} else {
+		// Common commit: dimmed with ●
+		indicator = "● "
+		if EnableColor {
+			hash = ColorDescription(hash)
+			message = ColorDescription(message)
+		}
+		return fmt.Sprintf("%s%s  %s\n", indicator, hash, message)
+	}
+}
+
+// renderCommitMultiline renders a commit in detailed multiline format
+// bright: if true, use bright/bold styling; if false, use dimmed styling
+func renderCommitMultiline(commit *git.Commit, bright bool) string {
+	var output strings.Builder
+
+	hash := commit.Hash
+	author := commit.Author
+	date := commit.Date
+	message := commit.FullMessage
+	if message == "" {
+		message = commit.Message
+	}
+
+	// Apply styling
+	if bright {
+		if EnableColor {
+			hash = ColorCurrent(hash)
+		}
+	} else {
+		if EnableColor {
+			hash = ColorDescription(hash)
+			author = ColorDescription(author)
+			date = ColorDescription(date)
+			message = ColorDescription(message)
+		}
+	}
+
+	// Format output
+	output.WriteString(fmt.Sprintf("commit %s\n", hash))
+	output.WriteString(fmt.Sprintf("Author: %s\n", author))
+	output.WriteString(fmt.Sprintf("Date:   %s\n", date))
+	output.WriteString("\n")
+
+	// Indent message
+	messageLines := strings.Split(strings.TrimSpace(message), "\n")
+	for _, line := range messageLines {
+		output.WriteString(fmt.Sprintf("    %s\n", line))
+	}
+
+	// Get file stats
+	stats, err := git.GetCommitStats(commit.Hash)
+	if err == nil && stats != "" {
+		output.WriteString("\n")
+		// Indent and style stats
+		statsLines := strings.Split(stats, "\n")
+		for _, line := range statsLines {
+			if !bright && EnableColor {
+				line = ColorDescription(line)
+			}
+			output.WriteString(fmt.Sprintf("    %s\n", line))
+		}
+	}
+
+	output.WriteString("\n")
+	return output.String()
+}
+
+// renderCommitMultilineWithIndicator renders a commit with type indicator for chronological mode
+func renderCommitMultilineWithIndicator(commit *git.Commit, isBranch bool, isParent bool) string {
+	var output strings.Builder
+
+	hash := commit.Hash
+	author := commit.Author
+	date := commit.Date
+	message := commit.FullMessage
+	if message == "" {
+		message = commit.Message
+	}
+
+	// Determine indicator and styling
+	indicator := ""
+	bright := isBranch
+
+	if isBranch {
+		indicator = "" // No indicator for branch commits
+	} else if isParent {
+		indicator = "[▼ Parent] "
+	} else {
+		indicator = "[● Common] "
+	}
+
+	// Apply styling
+	if bright {
+		if EnableColor {
+			hash = ColorCurrent(hash)
+		}
+	} else {
+		if EnableColor {
+			hash = ColorDescription(hash)
+			author = ColorDescription(author)
+			date = ColorDescription(date)
+			message = ColorDescription(message)
+			indicator = ColorDescription(indicator)
+		}
+	}
+
+	// Format output
+	output.WriteString(fmt.Sprintf("%scommit %s\n", indicator, hash))
+	output.WriteString(fmt.Sprintf("Author: %s\n", author))
+	output.WriteString(fmt.Sprintf("Date:   %s\n", date))
+	output.WriteString("\n")
+
+	// Indent message
+	messageLines := strings.Split(strings.TrimSpace(message), "\n")
+	for _, line := range messageLines {
+		output.WriteString(fmt.Sprintf("    %s\n", line))
+	}
+
+	// Get file stats
+	stats, err := git.GetCommitStats(commit.Hash)
+	if err == nil && stats != "" {
+		output.WriteString("\n")
+		statsLines := strings.Split(stats, "\n")
+		for _, line := range statsLines {
+			if !bright && EnableColor {
+				line = ColorDescription(line)
+			}
+			output.WriteString(fmt.Sprintf("    %s\n", line))
+		}
+	}
+
+	output.WriteString("\n")
+	return output.String()
+}

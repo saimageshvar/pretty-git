@@ -25,6 +25,7 @@ func Execute() error {
 	root.AddCommand(NewSetCmd())
 	root.AddCommand(NewSetParentCmd()) // Keep for backward compatibility
 	root.AddCommand(NewBrowseCmd())
+	root.AddCommand(NewLogCmd())
 
 	return root.Execute()
 }

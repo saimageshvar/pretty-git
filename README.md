@@ -3,11 +3,12 @@
 Small CLI to visualize git branch parent→child trees and record parent metadata and descriptions on branch creation. All output is aesthetically refined with status indicators, coloring, and interactive features.
 
 Status
-- **Complete**: `checkout` (wrapper with parent metadata and descriptions), `branches` (static renderer with status indicators and descriptions), `browse` (interactive TUI), and `set` (set parent and/or description for branches).
+- **Complete**: `checkout` (wrapper with parent metadata and descriptions), `branches` (static renderer with status indicators and descriptions), `browse` (interactive TUI), `set` (set parent and/or description for branches), and `log` (parent-aware commit log with smart scoping).
 - Metadata recorded in repository-local git config under `branch.<branch>.pretty-git-parent` and `branch.<branch>.pretty-git-description`.
 - Branch names with special characters (/, _, -, ~) work transparently - no encoding needed.
 - **Status indicators** integrated throughout: merged, ahead/behind, diverged, tracking, stale detection.
 - **Branch descriptions** displayed as subtle subtitle text beneath branch names in both static and interactive views.
+- **Commit log** shows commits with parent-awareness: branch-unique commits by default, with `--all` flag to show full history with visual distinction.
 - Core files: `cmd/pretty-git/*`, `internal/{git,ui,cmdutil}/*`.
 
 
@@ -40,6 +41,7 @@ Run the binary to see help and commands:
 ./pretty-git branches --help
 ./pretty-git browse --help
 ./pretty-git set --help
+./pretty-git log --help
 ```
 
 checkout
@@ -237,6 +239,32 @@ The TUI displays:
 - Status bar showing selected branch and its parent metadata
 - Keyboard-driven navigation for efficient branch management
 
+log
+- Display commit history with parent-awareness. Default shows only commits unique to the current branch. Use `--all` to show full history organized into three sections (▲ current only, ● common, ▼ parent only).
+
+Flags:
+- `--all` : show full history with sections (default: branch-unique only)
+- `--multiline` : detailed format with file stats (default: compact oneline)
+- `--chronological` : time-ordered view with inline indicators (only with `--all`)
+- `--ascii` : use ASCII symbols (^, o, v) instead of Unicode (▲, ●, ▼)
+- `--no-color` : disable colored output
+
+Examples:
+
+```bash
+# Default: branch-unique commits only
+./pretty-git log
+
+# Full history organized by sections
+./pretty-git log --all
+
+# Chronological order with indicators
+./pretty-git log --all --chronological
+
+# Detailed multiline format
+./pretty-git log --multiline
+```
+
 
 Implementation notes
 - Git commands use the system `git` via `internal/cmdutil.RunGit`.
@@ -256,6 +284,7 @@ git config --local branch.<branch>.pretty-git-description <description>
 - `internal/cmdutil.RunGit` returns stdout, stderr, exit code, and error so callers can treat `git config --get-regexp` exit code 1 as "no matches" (empty metadata).
 - **Status detection** (`internal/git/git.go`): `GetBranchStatus()` checks merge status against **direct parent** (not main), detects ahead/behind via `git rev-list`, and checks staleness by comparing commit timestamp with current time (>30 days = stale).
 - **Coloring** (`internal/ui/style.go`): Current branch is bright green; merged branches are dim/gray; stale branches are yellow; descriptions are rendered in dim italic; everything else uses terminal default color (works in all color schemes).
+- **Commit display** (`internal/ui/render.go`): Branch-unique commits shown bright/bold; common/parent commits shown dimmed. Supports both grouped (by section) and chronological modes.
 - **Description display**: Rendered as subtle subtitle text beneath branch names with proper indentation matching the tree structure.
 - **Expand/collapse indicators** (`internal/ui/tui.go`): ▼ for expanded, ▶ for collapsed (triangles provide clear visual distinction from tree connectors).
 - Renderer implemented in `internal/ui/render.go` for static display and `internal/ui/tui.go` for interactive TUI using bubbletea.

@@ -269,3 +269,114 @@ func GetMainBranch() (string, error) {
 
 	return "", fmt.Errorf("no branches found")
 }
+
+// Commit represents a git commit with its metadata
+type Commit struct {
+	Hash        string
+	ShortHash   string
+	Author      string
+	Date        string
+	Message     string
+	FullMessage string
+	Stats       string // file change statistics
+}
+
+// GetCommitLog returns commits in a range with full metadata
+// If onBranchOnly is true, returns commits on current branch not in parent (parent..HEAD)
+// Otherwise returns full history (HEAD) or with parent commits included
+func GetCommitLog(branch string, parent string, onBranchOnly bool) ([]*Commit, error) {
+	var args []string
+	args = append(args, "log")
+
+	// Determine the range
+	if onBranchOnly && parent != "" {
+		// Show only commits unique to this branch
+		args = append(args, parent+".."+branch)
+	} else {
+		// Show full history
+		args = append(args, branch)
+	}
+
+	// Format: hash|shorthash|author|date|subject|body
+	args = append(args, "--format=%H|%h|%an|%ad|%s|%b", "--date=format:%Y-%m-%d %H:%M")
+
+	out, _, _, err := cmdutil.RunGit(args...)
+	if err != nil {
+		return nil, err
+	}
+
+	if out == "" {
+		return []*Commit{}, nil
+	}
+
+	commits := []*Commit{}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if line == "" {
+			continue
+		}
+
+		parts := strings.SplitN(line, "|", 6)
+		if len(parts) < 6 {
+			continue
+		}
+
+		commit := &Commit{
+			Hash:        parts[0],
+			ShortHash:   parts[1],
+			Author:      parts[2],
+			Date:        parts[3],
+			Message:     parts[4],
+			FullMessage: parts[5],
+		}
+
+		commits = append(commits, commit)
+	}
+
+	return commits, nil
+}
+
+// GetCommitStats returns file change statistics for a commit
+func GetCommitStats(hash string) (string, error) {
+	out, _, _, err := cmdutil.RunGit("show", "--stat", "--format=", hash)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// GetAheadBehindCounts returns how many commits branch is ahead/behind parent
+func GetAheadBehindCounts(branch string, parent string) (ahead int, behind int, err error) {
+	if parent == "" {
+		return 0, 0, nil
+	}
+
+	out, _, _, err := cmdutil.RunGit("rev-list", "--left-right", "--count", parent+"..."+branch)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	parts := strings.Fields(strings.TrimSpace(out))
+	if len(parts) == 2 {
+		fmt.Sscanf(parts[0], "%d", &behind)
+		fmt.Sscanf(parts[1], "%d", &ahead)
+	}
+
+	return ahead, behind, nil
+}
+
+// GetBranchPoint returns the merge-base commit hash between branch and parent
+func GetBranchPoint(branch string, parent string) (string, error) {
+	if parent == "" {
+		return "", nil
+	}
+
+	out, _, _, err := cmdutil.RunGit("merge-base", branch, parent)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(out), nil
+}
