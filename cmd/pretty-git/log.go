@@ -11,10 +11,9 @@ import (
 )
 
 func NewLogCmd() *cobra.Command {
-	var showAll bool
+	var bySection bool
 	var multiline bool
 	var noColor bool
-	var chronological bool
 	var ascii bool
 	var maxCommits int
 	var usePager bool
@@ -23,16 +22,17 @@ func NewLogCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "log",
 		Short: "Show commits with parent-awareness and smart scoping",
-		Long: `Display commits with visual distinction between commits unique to the current branch
-and commits inherited from the parent branch.
+		Long: `Display commits from the current branch with visual distinction between
+commits unique to the branch and commits inherited from the parent.
 
-By default, shows only commits unique to the current branch (branch-only commits).
-Use --all to show full history including inherited commits from the parent.
+By default, shows commits in chronological order from the current branch,
+including both branch-unique commits and common commits shared with the parent.
+Parent-only commits (commits in parent but not in current branch) are excluded.
 
 Formats:
-  Default: Oneline format (hash message [markers])
-  --multiline: Detailed format with author, date, and stats
-  --chronological: Show commits in time order (only with --all)`,
+  Default: Chronological order (time-based)
+  --by-section: Group commits by type (Current Branch Only, Common Commits)
+  --multiline: Detailed format with author, date, and stats`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Get current branch
 			branch, err := git.GetCurrentBranch()
@@ -52,17 +52,17 @@ Formats:
 				return err
 			}
 
-			// If no parent and --all is specified, inform user
-			if showAll && !hasParent {
-				fmt.Fprintln(os.Stderr, "Note: No parent configured. Use 'pretty-git set --parent <branch>' to set one.")
-				fmt.Fprintln(os.Stderr, "Showing all commits on this branch.\n")
+			// If no parent, inform user
+			if !hasParent {
+				fmt.Fprintln(os.Stderr, "Note: No parent configured. Showing all commits on this branch.")
+				fmt.Fprintln(os.Stderr, "Use 'pretty-git set --parent <branch>' to set a parent.\n")
 			}
 
 			// Apply color toggle
 			ui.EnableColor = !noColor
 
-			// Render the log
-			out, err := ui.RenderCommitLog(branch, parent, hasParent, showAll, multiline, chronological, ascii, maxCommits)
+			// Render the log (chronological is now default, bySection is opt-in)
+			out, err := ui.RenderCommitLog(branch, parent, hasParent, bySection, multiline, ascii, maxCommits)
 			if err != nil {
 				return err
 			}
@@ -80,10 +80,9 @@ Formats:
 		},
 	}
 
-	cmd.Flags().BoolVar(&showAll, "all", false, "show full history including parent commits")
+	cmd.Flags().BoolVar(&bySection, "by-section", false, "group commits by section instead of chronological order")
 	cmd.Flags().BoolVar(&multiline, "multiline", false, "use detailed multiline format")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable colored output")
-	cmd.Flags().BoolVar(&chronological, "chronological", false, "show commits in chronological order (only with --all)")
 	cmd.Flags().BoolVar(&ascii, "ascii", false, "use ASCII symbols instead of Unicode")
 	cmd.Flags().IntVar(&maxCommits, "max-commits", 300, "maximum commits per section (0 for unlimited)")
 	cmd.Flags().BoolVar(&usePager, "no-pager", false, "disable pager (pager is enabled by default)")

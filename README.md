@@ -3,12 +3,12 @@
 Small CLI to visualize git branch parent→child trees and record parent metadata and descriptions on branch creation. All output is aesthetically refined with status indicators, coloring, and interactive features.
 
 Status
-- **Complete**: `checkout` (wrapper with parent metadata and descriptions), `branches` (static renderer with status indicators and descriptions), `browse` (interactive TUI), `set` (set parent and/or description for branches), `log` (parent-aware commit log with smart scoping), and `snapshot` (save and restore working directory checkpoints without committing).
+- **Complete**: `checkout` (wrapper with parent metadata and descriptions), `branches` (static renderer with status indicators and descriptions), `browse` (interactive TUI), `set` (set parent and/or description for branches), `log` (parent-aware commit log with chronological display by default, showing only current branch commits), and `snapshot` (save and restore working directory checkpoints without committing).
 - Metadata recorded in repository-local git config under `branch.<branch>.pretty-git-parent` and `branch.<branch>.pretty-git-description`.
 - Branch names with special characters (/, _, -, ~) work transparently - no encoding needed.
 - **Status indicators** integrated throughout: merged, ahead/behind, diverged, tracking, stale detection.
 - **Branch descriptions** displayed as subtle subtitle text beneath branch names in both static and interactive views.
-- **Commit log** shows commits with parent-awareness: branch-unique commits by default, with `--all` flag to show full history with visual distinction.
+- **Commit log** shows commits from the current branch (both unique and common) by default in chronological order, with optional `--by-section` flag to group by type. Parent-only commits are excluded.
 - **Snapshots** allow saving periodic checkpoints of uncommitted changes, stored using git stash without affecting the working directory.
 - Core files: `cmd/pretty-git/*`, `internal/{git,ui,cmdutil}/*`.
 
@@ -242,13 +242,12 @@ The TUI displays:
 - Keyboard-driven navigation for efficient branch management
 
 log
-- Display commit history with parent-awareness. Default shows only commits unique to the current branch. Use `--all` to show full history organized into three sections (▲ current only, ● common, ▼ parent only).
+- Display commit history with parent-awareness. By default shows commits from the current branch (both branch-unique and common commits) in chronological order. Parent-only commits are excluded.
 
 Flags:
-- `--all` : show full history with sections (default: branch-unique only)
+- `--by-section` : group commits by section (default: chronological order)
 - `--multiline` : detailed format with file stats (default: compact oneline)
-- `--chronological` : time-ordered view with inline indicators (only with `--all`)
-- `--ascii` : use ASCII symbols (^, o, v) instead of Unicode (▲, ●, ▼)
+- `--ascii` : use ASCII symbols (^, o) instead of Unicode (▲, ●)
 - `--no-color` : disable colored output
 - `--max-commits <N>` : limit commits per section to N (default: 300, use 0 for unlimited)
 - `--no-pager` : disable automatic pagination (pager is enabled by default)
@@ -265,29 +264,26 @@ Performance notes:
 Examples:
 
 ```bash
-# Default: branch-unique commits only (pager auto-activates if needed)
+# Default: chronological order showing current branch commits (pager auto-activates if needed)
 ./pretty-git log
 
-# Full history organized by sections (with pager)
-./pretty-git log --all
+# Group by section (Current Branch Only, Common Commits)
+./pretty-git log --by-section
 
 # Disable pager for piping or scripts
-./pretty-git log --all --no-pager
+./pretty-git log --no-pager
 
-# Full history with limited commits per section
-./pretty-git log --all --max-commits=50
+# Chronological order with limited commits
+./pretty-git log --max-commits=50
 
-# Full history with no limit
-./pretty-git log --all --max-commits=0
-
-# Chronological order with indicators
-./pretty-git log --all --chronological
+# Show all commits without limit
+./pretty-git log --max-commits=0
 
 # Detailed multiline format
 ./pretty-git log --multiline
 
 # Force pager to stay open (useful for small outputs)
-./pretty-git log --all --force-pager
+./pretty-git log --force-pager
 ```
 
 snapshot
@@ -401,7 +397,7 @@ git config --local branch.<branch>.pretty-git-description <description>
 - `internal/cmdutil.RunGit` returns stdout, stderr, exit code, and error so callers can treat `git config --get-regexp` exit code 1 as "no matches" (empty metadata).
 - **Status detection** (`internal/git/git.go`): `GetBranchStatus()` checks merge status against **direct parent** (not main), detects ahead/behind via `git rev-list`, and checks staleness by comparing commit timestamp with current time (>30 days = stale).
 - **Coloring** (`internal/ui/style.go`): Current branch is bright green; merged branches are dim/gray; stale branches are yellow; descriptions are rendered in dim italic; everything else uses terminal default color (works in all color schemes).
-- **Commit display** (`internal/ui/render.go`): Branch-unique commits shown bright/bold; common/parent commits shown dimmed. Supports both grouped (by section) and chronological modes.
+- **Commit display** (`internal/ui/render.go`): Branch-unique commits shown bright/bold; common commits shown dimmed. Chronological is the default view, with `--by-section` flag for grouped display. Parent-only commits are excluded.
 - **Description display**: Rendered as subtle subtitle text beneath branch names with proper indentation matching the tree structure.
 - **Expand/collapse indicators** (`internal/ui/tui.go`): ▼ for expanded, ▶ for collapsed (triangles provide clear visual distinction from tree connectors).
 - Renderer implemented in `internal/ui/render.go` for static display and `internal/ui/tui.go` for interactive TUI using bubbletea.

@@ -207,12 +207,11 @@ func RenderBranchesTreeWithStatus(parents map[string]string, current string, com
 // branch: current branch name
 // parent: parent branch name (may be empty)
 // hasParent: whether a parent is configured
-// showAll: if true, show commits from parent; if false, only branch-unique commits
+// bySection: if true, group by section; if false, show chronologically (default)
 // multiline: if true, use detailed format; if false, use oneline format
-// chronological: if true with showAll, show in time order; if false, group by relationship
 // ascii: if true, use ASCII symbols; if false, use Unicode symbols
 // maxCommits: maximum commits per section (0 for unlimited)
-func RenderCommitLog(branch string, parent string, hasParent bool, showAll bool, multiline bool, chronological bool, ascii bool, maxCommits int) (string, error) {
+func RenderCommitLog(branch string, parent string, hasParent bool, bySection bool, multiline bool, ascii bool, maxCommits int) (string, error) {
 	var output strings.Builder
 
 	// Show header with ahead/behind status
@@ -234,17 +233,17 @@ func RenderCommitLog(branch string, parent string, hasParent bool, showAll bool,
 		output.WriteString(header)
 	}
 
-	if showAll && hasParent {
+	if hasParent {
 		// Add legend at the top for better visibility when paging
-		if chronological {
-			output.WriteString(renderLegendChronological(ascii))
-		} else {
+		if bySection {
 			output.WriteString(renderLegend(ascii))
+		} else {
+			output.WriteString(renderLegendChronological(ascii))
 		}
-		output.WriteString("\n")
+		output.WriteString("\n\n")
 
-		// Show all commits with distinction between branch and parent commits
-		_, err := renderAllCommitsWithParent(branch, parent, multiline, chronological, ascii, maxCommits, &output)
+		// Show commits from current branch with distinction
+		_, err := renderCommitsFromBranch(branch, parent, multiline, bySection, ascii, maxCommits, &output)
 		if err != nil {
 			return "", err
 		}
@@ -252,19 +251,14 @@ func RenderCommitLog(branch string, parent string, hasParent bool, showAll bool,
 		return output.String(), nil
 	}
 
-	// Default: show only commits unique to branch
-	commits, err := git.GetCommitLog(branch, parent, true)
+	// No parent: show all commits from branch
+	commits, err := git.GetCommitLog(branch, "", false)
 	if err != nil {
 		return "", err
 	}
 
 	if len(commits) == 0 {
-		if hasParent {
-			output.WriteString("No commits unique to this branch.\n")
-			output.WriteString("(All commits are shared with parent or branch is up to date)\n")
-		} else {
-			output.WriteString("No commits found.\n")
-		}
+		output.WriteString("No commits found.\n")
 		return output.String(), nil
 	}
 
@@ -280,77 +274,50 @@ func RenderCommitLog(branch string, parent string, hasParent bool, showAll bool,
 	return output.String(), nil
 }
 
-// renderAllCommitsWithParent shows full history with visual distinction
-func renderAllCommitsWithParent(branch string, parent string, multiline bool, chronological bool, ascii bool, maxCommits int, output *strings.Builder) (string, error) {
-	if chronological {
-		return renderAllCommitsChronological(branch, parent, multiline, maxCommits, output)
+// renderCommitsFromBranch shows commits from the current branch only (no parent-only commits)
+func renderCommitsFromBranch(branch string, parent string, multiline bool, bySection bool, ascii bool, maxCommits int, output *strings.Builder) (string, error) {
+	if bySection {
+		return renderCommitsGrouped(branch, parent, multiline, ascii, maxCommits, output)
 	}
-	return renderAllCommitsGrouped(branch, parent, multiline, ascii, maxCommits, output)
+	return renderCommitsChronological(branch, parent, multiline, maxCommits, output)
 }
 
-// renderAllCommitsChronological shows commits in time order with visual distinction
-func renderAllCommitsChronological(branch string, parent string, multiline bool, maxCommits int, output *strings.Builder) (string, error) {
+// renderCommitsChronological shows commits from current branch in time order with visual distinction
+func renderCommitsChronological(branch string, parent string, multiline bool, maxCommits int, output *strings.Builder) (string, error) {
 	// Get branch-only commits to identify them
 	branchCommits, err := git.GetCommitLog(branch, parent, true)
 	if err != nil {
 		return "", err
 	}
 
-	// Get parent-only commits
-	parentCommits, err := git.GetCommitLog(parent, branch, true)
-	if err != nil {
-		return "", err
-	}
-
-	// Build sets for quick lookup
+	// Build set for quick lookup
 	branchHashes := make(map[string]bool)
 	for _, c := range branchCommits {
 		branchHashes[c.Hash] = true
 	}
 
-	parentHashes := make(map[string]bool)
-	for _, c := range parentCommits {
-		parentHashes[c.Hash] = true
-	}
-
-	// Get commits from current branch
+	// Get all commits from current branch (includes common commits)
 	branchAllCommits, err := git.GetCommitLog(branch, "", false)
 	if err != nil {
 		return "", err
 	}
 
-	// Merge all commits (branch + parent-only) and deduplicate
-	allCommitsMap := make(map[string]*git.Commit)
-	for _, c := range branchAllCommits {
-		allCommitsMap[c.Hash] = c
-	}
-	for _, c := range parentCommits {
-		allCommitsMap[c.Hash] = c
-	}
-
-	// Convert map back to slice
-	allCommits := make([]*git.Commit, 0, len(allCommitsMap))
-	for _, c := range allCommitsMap {
-		allCommits = append(allCommits, c)
-	}
-
 	// Apply limit if set
-	totalCommits := len(allCommits)
+	totalCommits := len(branchAllCommits)
 	truncated := 0
 	if maxCommits > 0 && totalCommits > maxCommits {
 		truncated = totalCommits - maxCommits
-		allCommits = allCommits[:maxCommits]
+		branchAllCommits = branchAllCommits[:maxCommits]
 	}
 
 	// Render all commits with distinction
-	for _, commit := range allCommits {
+	for _, commit := range branchAllCommits {
 		isBranchCommit := branchHashes[commit.Hash]
-		isParentCommit := parentHashes[commit.Hash]
 
 		if multiline {
-			output.WriteString(renderCommitMultilineWithIndicator(commit, isBranchCommit, isParentCommit))
+			output.WriteString(renderCommitMultilineWithIndicator(commit, isBranchCommit))
 		} else {
-			output.WriteString(renderCommitOnelineWithIndicator(commit, isBranchCommit, isParentCommit))
+			output.WriteString(renderCommitOnelineWithIndicator(commit, isBranchCommit))
 		}
 	}
 
@@ -366,8 +333,8 @@ func renderAllCommitsChronological(branch string, parent string, multiline bool,
 	return output.String(), nil
 }
 
-// renderAllCommitsGrouped shows commits grouped by relationship
-func renderAllCommitsGrouped(branch string, parent string, multiline bool, ascii bool, maxCommits int, output *strings.Builder) (string, error) {
+// renderCommitsGrouped shows commits from current branch grouped by type (no parent-only)
+func renderCommitsGrouped(branch string, parent string, multiline bool, ascii bool, maxCommits int, output *strings.Builder) (string, error) {
 	// Get branch-only commits
 	branchCommits, err := git.GetCommitLog(branch, parent, true)
 	if err != nil {
@@ -377,11 +344,9 @@ func renderAllCommitsGrouped(branch string, parent string, multiline bool, ascii
 	// Determine symbols based on ascii flag
 	currentSymbol := "▲"
 	commonSymbol := "●"
-	parentSymbol := "▼"
 	if ascii {
 		currentSymbol = "^"
 		commonSymbol = "o"
-		parentSymbol = "v"
 	}
 
 	if len(branchCommits) > 0 {
@@ -420,32 +385,22 @@ func renderAllCommitsGrouped(branch string, parent string, multiline bool, ascii
 		output.WriteString("\n")
 	}
 
-	// Get parent-only commits (commits in parent that aren't in branch yet)
-	parentCommits, err := git.GetCommitLog(parent, branch, true)
-	if err != nil {
-		return "", err
-	}
-
 	// Get shared/common commits (commits in both branches)
 	sharedCommits, err := git.GetCommitLog(parent, "", false)
 	if err != nil {
 		return "", err
 	}
 
-	// Build set of branch and parent commit hashes to identify shared commits
+	// Build set of branch commit hashes to identify shared commits
 	branchSet := make(map[string]bool)
 	for _, c := range branchCommits {
 		branchSet[c.Hash] = true
 	}
-	parentOnlySet := make(map[string]bool)
-	for _, c := range parentCommits {
-		parentOnlySet[c.Hash] = true
-	}
 
-	// Filter to only shared commits
+	// Filter to only shared commits (commits in parent that are also in current branch)
 	var actualShared []*git.Commit
 	for _, c := range sharedCommits {
-		if !branchSet[c.Hash] && !parentOnlySet[c.Hash] {
+		if !branchSet[c.Hash] {
 			actualShared = append(actualShared, c)
 		}
 	}
@@ -481,41 +436,6 @@ func renderAllCommitsGrouped(branch string, parent string, multiline bool, ascii
 			}
 			output.WriteString(truncationMsg)
 		}
-		
-		output.WriteString("\n")
-	}
-
-	if len(parentCommits) > 0 {
-		totalParent := len(parentCommits)
-		displayParent := parentCommits
-		truncatedParent := 0
-		
-		// Apply limit if set
-		if maxCommits > 0 && totalParent > maxCommits {
-			truncatedParent = totalParent - maxCommits
-			displayParent = parentCommits[:maxCommits]
-		}
-
-		// Show section header for parent commits
-		sectionHeader := fmt.Sprintf("%s Parent branch only (%d)\n", parentSymbol, totalParent)
-		output.WriteString(sectionHeader)
-
-		for _, commit := range displayParent {
-			if multiline {
-				output.WriteString(renderCommitMultiline(commit, false))
-			} else {
-				output.WriteString(renderCommitOneline(commit, false))
-			}
-		}
-		
-		// Show truncation message if commits were limited
-		if truncatedParent > 0 {
-			truncationMsg := fmt.Sprintf("... %d more commits\n", truncatedParent)
-			if EnableColor {
-				truncationMsg = ColorDescription(truncationMsg)
-			}
-			output.WriteString(truncationMsg)
-		}
 	}
 
 	return output.String(), nil
@@ -526,9 +446,9 @@ func renderLegend(ascii bool) string {
 	var legend string
 
 	if ascii {
-		legend = "Legend: ^ Current branch only | o Common commits | v Parent branch only"
+		legend = "Legend: ^ Current branch only | o Common commits"
 	} else {
-		legend = "Legend: \u25b2 Current branch only | \u25cf Common commits | \u25bc Parent branch only"
+		legend = "Legend: ▲ Current branch only | ● Common commits"
 	}
 
 	if EnableColor {
@@ -542,9 +462,9 @@ func renderLegendChronological(ascii bool) string {
 	var legend string
 
 	if ascii {
-		legend = "Legend: o Common commit | v Parent branch only"
+		legend = "Legend: o Common commit"
 	} else {
-		legend = "Legend: \u25cf Common commit | \u25bc Parent branch only"
+		legend = "Legend: ● Common commit"
 	}
 
 	if EnableColor {
@@ -576,7 +496,7 @@ func renderCommitOneline(commit *git.Commit, bright bool) string {
 }
 
 // renderCommitOnelineWithIndicator renders a commit with type indicator for chronological mode
-func renderCommitOnelineWithIndicator(commit *git.Commit, isBranch bool, isParent bool) string {
+func renderCommitOnelineWithIndicator(commit *git.Commit, isBranch bool) string {
 	hash := commit.ShortHash
 	message := commit.Message
 	indicator := "  "
@@ -585,14 +505,6 @@ func renderCommitOnelineWithIndicator(commit *git.Commit, isBranch bool, isParen
 		// Branch-unique commit: bright, no indicator
 		if EnableColor {
 			hash = ColorCurrent(hash)
-		}
-		return fmt.Sprintf("%s%s  %s\n", indicator, hash, message)
-	} else if isParent {
-		// Parent-only commit: dimmed with ▼
-		indicator = "▼ "
-		if EnableColor {
-			hash = ColorDescription(hash)
-			message = ColorDescription(message)
 		}
 		return fmt.Sprintf("%s%s  %s\n", indicator, hash, message)
 	} else {
@@ -664,7 +576,7 @@ func renderCommitMultiline(commit *git.Commit, bright bool) string {
 }
 
 // renderCommitMultilineWithIndicator renders a commit with type indicator for chronological mode
-func renderCommitMultilineWithIndicator(commit *git.Commit, isBranch bool, isParent bool) string {
+func renderCommitMultilineWithIndicator(commit *git.Commit, isBranch bool) string {
 	var output strings.Builder
 
 	hash := commit.Hash
@@ -681,8 +593,6 @@ func renderCommitMultilineWithIndicator(commit *git.Commit, isBranch bool, isPar
 
 	if isBranch {
 		indicator = "" // No indicator for branch commits
-	} else if isParent {
-		indicator = "[▼ Parent] "
 	} else {
 		indicator = "[● Common] "
 	}
