@@ -3,12 +3,13 @@
 Small CLI to visualize git branch parent→child trees and record parent metadata and descriptions on branch creation. All output is aesthetically refined with status indicators, coloring, and interactive features.
 
 Status
-- **Complete**: `checkout` (wrapper with parent metadata and descriptions), `branches` (static renderer with status indicators and descriptions), `browse` (interactive TUI), `set` (set parent and/or description for branches), and `log` (parent-aware commit log with smart scoping).
+- **Complete**: `checkout` (wrapper with parent metadata and descriptions), `branches` (static renderer with status indicators and descriptions), `browse` (interactive TUI), `set` (set parent and/or description for branches), `log` (parent-aware commit log with smart scoping), and `snapshot` (save and restore working directory checkpoints without committing).
 - Metadata recorded in repository-local git config under `branch.<branch>.pretty-git-parent` and `branch.<branch>.pretty-git-description`.
 - Branch names with special characters (/, _, -, ~) work transparently - no encoding needed.
 - **Status indicators** integrated throughout: merged, ahead/behind, diverged, tracking, stale detection.
 - **Branch descriptions** displayed as subtle subtitle text beneath branch names in both static and interactive views.
 - **Commit log** shows commits with parent-awareness: branch-unique commits by default, with `--all` flag to show full history with visual distinction.
+- **Snapshots** allow saving periodic checkpoints of uncommitted changes, stored using git stash without affecting the working directory.
 - Core files: `cmd/pretty-git/*`, `internal/{git,ui,cmdutil}/*`.
 
 
@@ -42,6 +43,7 @@ Run the binary to see help and commands:
 ./pretty-git browse --help
 ./pretty-git set --help
 ./pretty-git log --help
+./pretty-git snapshot --help
 ```
 
 checkout
@@ -288,6 +290,98 @@ Examples:
 ./pretty-git log --all --force-pager
 ```
 
+snapshot
+- Save and restore working directory snapshots without committing. Snapshots are stored using git stash under the hood but don't affect your working directory.
+
+**Important**: You must stage the files you want to snapshot using `git add` before creating a snapshot. Only staged changes are included in snapshots.
+
+Create a snapshot:
+
+```bash
+# Stage files first, then create a snapshot
+git add file1.txt file2.txt
+./pretty-git snapshot create checkpoint-1
+
+# Stage all changes and create a snapshot with a message
+git add .
+./pretty-git snapshot create checkpoint-1 -m "Before refactoring"
+```
+
+List snapshots:
+
+```bash
+# List all saved snapshots (grouped by branch)
+./pretty-git snapshot list
+```
+
+Output shows snapshots organized by branch, with the current branch highlighted:
+
+```
+Saved snapshots (4):
+
+■ master (current)
+  ● master-checkpoint
+    Time: 2026-01-31 08:54:49
+    Hash: 21c3381d3cff
+
+■ feature/ui-updates
+  ● ui-checkpoint-1
+    Time: 2026-01-31 08:54:40
+    Hash: c8bd240427c3
+```
+
+Restore to a snapshot:
+
+```bash
+# Restore working directory to a saved snapshot
+./pretty-git snapshot restore checkpoint-1
+```
+
+**Note**: If restoring a snapshot from a different branch than the one you're currently on, you'll receive a warning and confirmation prompt to prevent accidental cross-branch restores.
+
+Clear snapshots:
+
+```bash
+# Remove a specific snapshot
+./pretty-git snapshot clear checkpoint-1
+
+# Remove all snapshots (with confirmation)
+./pretty-git snapshot clear --all
+
+# Remove all snapshots without confirmation
+./pretty-git snapshot clear --all --yes
+```
+
+Flags for `snapshot create`:
+- `-m`, `--message` : Optional message for the snapshot (default: "Snapshot: <name>")
+
+Flags for `snapshot clear`:
+- `--all` : Clear all snapshots instead of a single one
+- `-y`, `--yes` : Skip confirmation when clearing all snapshots
+
+Use cases:
+- Experiment with changes while preserving multiple checkpoint states
+- Create named savepoints during a complex refactoring
+- Quickly switch between different work-in-progress states
+- Save periodic backups of staged work without cluttering commit history
+
+Technical details:
+- **Staging required**: Only staged changes are included in snapshots. Use `git add` to stage files before creating a snapshot
+- **Branch scoping**: Each snapshot records the branch it was created on. Snapshots are grouped by branch in list view, and restoring a snapshot from a different branch triggers a warning
+- Snapshots use `git stash create` internally, which creates a stash commit of staged changes without modifying your working directory
+- Snapshot metadata is stored in `.git/pretty-git-snapshots.json`
+- Restoring uses `git restore --source <hash>` to apply the snapshot state
+- **Warning on restore**: If you have uncommitted changes, you'll be prompted before they're overwritten
+- **Cross-branch warning**: Restoring a snapshot from a different branch shows a warning and requires confirmation
+- Conflicts during restore are handled by git (conflict markers will be left for manual resolution)
+- Creating a snapshot with an existing name overwrites the previous snapshot with that name
+- **Snapshot names**: Can contain spaces and most special characters (except newlines/tabs). Names are validated before creation
+- **Hash validation**: When restoring, the tool checks if the snapshot hash still exists (it may be cleaned up by `git gc`)
+- **Independent snapshots**: Each snapshot is self-contained. Clearing one snapshot doesn't affect others
+
+Future enhancements:
+- See [LATER.md](LATER.md) for planned improvements
+
 
 Implementation notes
 - Git commands use the system `git` via `internal/cmdutil.RunGit`.
@@ -312,6 +406,7 @@ git config --local branch.<branch>.pretty-git-description <description>
 - **Expand/collapse indicators** (`internal/ui/tui.go`): ▼ for expanded, ▶ for collapsed (triangles provide clear visual distinction from tree connectors).
 - Renderer implemented in `internal/ui/render.go` for static display and `internal/ui/tui.go` for interactive TUI using bubbletea.
 - Interactive TUI in `cmd/pretty-git/browse.go` uses bubbletea (`github.com/charmbracelet/bubbletea`).
+- **Snapshots** (`cmd/pretty-git/snapshot.go`, `internal/git/git.go`): Use `git stash create` to snapshot all changes without modifying working directory; metadata stored in `.git/pretty-git-snapshots.json`; restore via `git restore --source <hash>`.
 
 Future work / contributions
 - Add `goreleaser.yml` and native packaging (nfpm) for releases.

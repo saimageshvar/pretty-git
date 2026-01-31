@@ -380,3 +380,69 @@ func GetBranchPoint(branch string, parent string) (string, error) {
 
 	return strings.TrimSpace(out), nil
 }
+
+// CreateSnapshot creates a stash of staged changes and returns the commit hash.
+// Uses git stash create which doesn't affect the working directory.
+// Returns error if nothing is staged.
+func CreateSnapshot(message string) (string, error) {
+	// Check if there are any staged changes
+	out, _, _, err := cmdutil.RunGit("diff", "--cached", "--quiet")
+	if err == nil {
+		// Exit code 0 means no differences (nothing staged)
+		return "", fmt.Errorf("no changes staged for snapshot. Use 'git add' to stage files first")
+	}
+	// Exit code 1 means there are staged changes (this is what we want)
+
+	// Create stash (doesn't modify working tree)
+	out, _, _, err = cmdutil.RunGit("stash", "create", message)
+	if err != nil {
+		return "", fmt.Errorf("failed to create stash: %w", err)
+	}
+
+	hash := strings.TrimSpace(out)
+	if hash == "" {
+		return "", fmt.Errorf("no changes to snapshot")
+	}
+
+	return hash, nil
+}
+
+// RestoreSnapshot restores the working directory to the state of the given stash hash
+func RestoreSnapshot(hash string) error {
+	// Verify the hash exists
+	_, _, _, err := cmdutil.RunGit("cat-file", "-e", hash)
+	if err != nil {
+		return fmt.Errorf("snapshot hash not found in repository. The snapshot may have been cleaned up by git gc")
+	}
+
+	// Use git restore to restore files from the stash
+	_, stderr, _, err := cmdutil.RunGit("restore", "--source", hash, "--staged", "--worktree", ".")
+	if err != nil {
+		if strings.Contains(stderr, "conflict") {
+			return fmt.Errorf("conflicts occurred during restore. Resolve them manually and stage the resolved files")
+		}
+		return fmt.Errorf("failed to restore snapshot: %w", err)
+	}
+	return nil
+}
+
+// HasUncommittedChanges checks if there are uncommitted changes in the working directory
+func HasUncommittedChanges() (bool, error) {
+	// Check both staged and unstaged changes
+	_, _, _, err := cmdutil.RunGit("diff", "--quiet")
+	stagingClean := err == nil
+
+	_, _, _, err = cmdutil.RunGit("diff", "--cached", "--quiet")
+	indexClean := err == nil
+
+	return !(stagingClean && indexClean), nil
+}
+
+// GetGitDir returns the .git directory path
+func GetGitDir() (string, error) {
+	out, _, _, err := cmdutil.RunGit("rev-parse", "--git-dir")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}

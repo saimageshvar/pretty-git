@@ -77,6 +77,7 @@ mno7890  feat(auth): add login endpoint
 ## Future Enhancements (from initial plan)
 
 ### Log Command
+- Fix git log to show only current branch commits (exclude merged-in commits from other branches)
 - `--graph` flag for ASCII art graph visualization
 - `--json` output format for scripting
 - Filtering by author, date range, or path
@@ -84,6 +85,10 @@ mno7890  feat(auth): add login endpoint
 - Configurable default format (oneline vs multiline)
 - GPG signature verification display
 - Colorize commit subjects based on conventional commit prefixes (feat:, fix:, etc.)
+
+### Snapshot Command
+- Add filtering/grouping snapshots by branch in list command (e.g., `--branch <name>` to show only snapshots for a specific branch)
+- Add `--all-branches` flag for restore to show available snapshots from all branches in interactive selector
 
 ### General
 - Add tests for `internal/git` and `internal/ui` functions

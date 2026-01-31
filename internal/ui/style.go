@@ -200,3 +200,35 @@ func DisplayWithPager(content string, forcePager bool) error {
 
 	return nil
 }
+
+// ColorSuccess returns a green colored string (for success messages)
+func ColorSuccess(s string) string {
+	if !EnableColor {
+		return s
+	}
+	return color.New(color.FgGreen).Sprint(s)
+}
+
+// ColorHighlight returns a cyan colored string (for highlighting)
+func ColorHighlight(s string) string {
+	if !EnableColor {
+		return s
+	}
+	return color.New(color.FgCyan).Sprint(s)
+}
+
+// ColorDim returns a dimmed string (for secondary info)
+func ColorDim(s string) string {
+	if !EnableColor {
+		return s
+	}
+	return color.New(color.FgHiBlack).Sprint(s)
+}
+
+// ColorBold returns a bold string
+func ColorBold(s string) string {
+	if !EnableColor {
+		return s
+	}
+	return color.New(color.Bold).Sprint(s)
+}
