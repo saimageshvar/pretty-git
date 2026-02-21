@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
-	branchui "github.com/sai/pretty-git-revamp/internal/ui/branch"
-	"github.com/sai/pretty-git-revamp/internal/git"
+	branchui "github.com/sai/pretty-git/internal/ui/branch"
+	"github.com/sai/pretty-git/internal/git"
 )
 
 func runBranch() {

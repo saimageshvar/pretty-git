@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
-	"github.com/sai/pretty-git-revamp/internal/git"
-	checkoutui "github.com/sai/pretty-git-revamp/internal/ui/checkout"
+	"github.com/sai/pretty-git/internal/git"
+	checkoutui "github.com/sai/pretty-git/internal/ui/checkout"
 )
 
 // runCheckout handles `pgit checkout -b [name] [-p parent] [-d desc] [--layout=below|right]`.

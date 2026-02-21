@@ -11,7 +11,7 @@ pgit log [<ref>]
 - Fetches up to 200 commits via `git.ListCommits`
 
 ## Key files
-- `cmd/pretty-git-revamp/log.go` — runner (parses ref, gets terminal size, runs TUI)
+- `cmd/pretty-git/log.go` — runner (parses ref, gets terminal size, runs TUI)
 - `internal/git/git.go` — `Commit`, `CommitDetail`, `ListCommits`, `GetCommitDetail`
 - `internal/ui/log/model.go` — Bubble Tea model
 - `internal/ui/log/keymap.go` — key bindings

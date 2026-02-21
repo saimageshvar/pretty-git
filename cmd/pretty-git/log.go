@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
-	"github.com/sai/pretty-git-revamp/internal/git"
-	logui "github.com/sai/pretty-git-revamp/internal/ui/log"
+	"github.com/sai/pretty-git/internal/git"
+	logui "github.com/sai/pretty-git/internal/ui/log"
 )
 
 func runLog() {

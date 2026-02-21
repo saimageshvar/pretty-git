@@ -5,7 +5,7 @@ Interactive inline branch switcher (fzf-style, no alt screen).
 Arrow navigation, Enter to switch, `/` to filter, `q` to quit.
 
 ## Key files
-- `cmd/pretty-git-revamp/branch.go` — runner
+- `cmd/pretty-git/branch.go` — runner
 - `internal/git/git.go` — ListBranches, SwitchBranch, readAllParents, abbreviateRelTime
 - `internal/ui/branch/model.go` — Bubble Tea model
 - `internal/ui/branch/keymap.go` — key.Binding definitions + help.KeyMap impl

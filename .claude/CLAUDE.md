@@ -18,7 +18,7 @@ The program renders inside the terminal's scrollback. Users see output after qui
 
 ## Project Structure
 ```
-cmd/pretty-git-revamp/     # One file per subcommand (main.go, browse.go, log.go, ...)
+cmd/pretty-git/     # One file per subcommand (main.go, browse.go, log.go, ...)
 internal/git/       # Git operations (git.go)
 internal/ui/        # Shared TUI logic (tui.go, render.go, style.go)
 ```

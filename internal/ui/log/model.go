@@ -10,8 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/sai/pretty-git-revamp/internal/git"
-	ui "github.com/sai/pretty-git-revamp/internal/ui"
+	"github.com/sai/pretty-git/internal/git"
+	ui "github.com/sai/pretty-git/internal/ui"
 )
 
 // ── Layout constants ────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ pgit checkout -b [name] [-p parent] [-d description]
 - All-provided path: creates branch, sets parent/desc, prints summary to stdout
 
 ## Key files
-- `cmd/pretty-git-revamp/checkout.go` — flag parsing, TUI runner, printCreated
+- `cmd/pretty-git/checkout.go` — flag parsing, TUI runner, printCreated
 - `internal/ui/checkout/model.go` — Bubble Tea model
 - `internal/git/git.go` — `CreateBranch(name)` added
 

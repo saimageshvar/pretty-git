@@ -1,4 +1,4 @@
-module github.com/sai/pretty-git-revamp
+module github.com/sai/pretty-git
 
 go 1.24.2
 
