@@ -16,11 +16,12 @@ import (
 // ── Column widths ──────────────────────────────────────────────────────────
 
 const (
-	colMarker = 1
-	colName   = 32
-	colStatus = 12 // "✓ merged", "↑99 ↓99", etc.
-	colPad    = 2
-	maxVisible = 15 // max rows shown at once (inline / fzf-style)
+	colMarker          = 1
+	colName            = 32
+	colStatus          = 12 // "✓ merged", "↑99 ↓99", etc.
+	colPad             = 2
+	maxVisible         = 15 // max rows shown at once (inline / fzf-style)
+	maxParentCandidates = 4  // suggestion lines shown in set-parent mode
 )
 
 // ── renderItem ─────────────────────────────────────────────────────────────
@@ -35,9 +36,9 @@ type renderItem struct {
 // ── Model ──────────────────────────────────────────────────────────────────
 
 type Model struct {
-	branches    []git.Branch   // raw, unchanged
-	treeItems   []renderItem   // full tree, built once at startup
-	filtered    []renderItem   // active list (tree mode or flat filter mode)
+	branches    []git.Branch // raw, unchanged
+	treeItems   []renderItem // full tree, built once at startup
+	filtered    []renderItem // active list (tree mode or flat filter mode)
 	cursor      int
 	offset      int
 	filtering   bool
@@ -55,11 +56,27 @@ type Model struct {
 	filterInput textinput.Model
 	help        help.Model
 	keys        keyMap
+
+	// set-parent mode
+	settingParent    bool
+	parentInput      textinput.Model
+	parentCandidates []string // filtered local branch names
+	parentCursor     int
+	parentOffset     int
+	targetBranch     string // branch we're setting parent for
 }
 
 type switchDoneMsg struct {
 	err  error
 	name string
+}
+
+type parentSetMsg struct {
+	err    error
+	child  string
+	parent string // "" means parent was cleared
+	ahead  int
+	behind int
 }
 
 func New(branches []git.Branch, repoName string, termWidth, termHeight int) Model {
@@ -95,6 +112,15 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	ti.Placeholder = "type to filter…"
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
 
+	// ── parentInput ────────────────────────────────────────────────────────
+	pi := textinput.New()
+	pi.Prompt = ""
+	pi.PromptStyle = lipgloss.NewStyle()
+	pi.TextStyle = lipgloss.NewStyle().Foreground(ui.ColorHeader)
+	pi.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	pi.Placeholder = "type to filter branches…"
+	pi.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
+
 	// ── help ───────────────────────────────────────────────────────────────
 	h := help.New()
 	h.Styles.ShortKey = lipgloss.NewStyle().Bold(true).Foreground(ui.ColorKeyHint)
@@ -112,6 +138,7 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 		localCount:  local,
 		remoteCount: remote,
 		filterInput: ti,
+		parentInput: pi,
 		help:        h,
 		keys:        defaultKeyMap(),
 	}
@@ -151,7 +178,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.done = true
 		return m, tea.Quit
 
+	case parentSetMsg:
+		m.settingParent = false
+		m.parentInput.Blur()
+		m.parentInput.Reset()
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		// Update the branch in-memory so the tree reflects the new parent immediately.
+		for i := range m.branches {
+			if m.branches[i].Name == msg.child {
+				m.branches[i].Parent = msg.parent
+				m.branches[i].ParentAhead = msg.ahead
+				m.branches[i].ParentBehind = msg.behind
+				break
+			}
+		}
+		m.treeItems = buildRenderItems(m.branches)
+		m.filtered = m.treeItems
+		m.applyFilter()
+		return m, nil
+
 	case tea.KeyMsg:
+		if m.settingParent {
+			return m.updateSetParent(msg)
+		}
 		if m.filtering {
 			return m.updateFilter(msg)
 		}
@@ -176,6 +228,22 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 		m.err = ""
 		return m, m.filterInput.Focus()
+	case key.Matches(msg, m.keys.SetParent):
+		if len(m.filtered) == 0 {
+			return m, nil
+		}
+		b := m.filtered[m.cursor].branch
+		if b.IsRemote {
+			return m, nil
+		}
+		m.targetBranch = b.Name
+		m.settingParent = true
+		m.err = ""
+		// Always start with an empty filter input; sentinel provides the clear option.
+		m.parentInput.Reset()
+		m.buildParentCandidates()
+		return m, m.parentInput.Focus()
+
 	case key.Matches(msg, m.keys.Quit):
 		m.quitting = true
 		return m, tea.Quit
@@ -271,6 +339,98 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.filterInput, cmd = m.filterInput.Update(msg)
 	m.applyFilter()
 	return m, cmd
+}
+
+func (m Model) updateSetParent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Clear):
+		if m.parentInput.Value() != "" {
+			// Clear filter, stay in set-parent mode.
+			m.parentInput.Reset()
+			m.buildParentCandidates()
+			return m, nil
+		}
+		// Already empty — exit set-parent mode.
+		m.settingParent = false
+		m.parentInput.Blur()
+		m.parentCandidates = nil
+		m.parentCursor = 0
+		m.parentOffset = 0
+		return m, nil
+
+	case key.Matches(msg, m.keys.Quit):
+		m.quitting = true
+		return m, tea.Quit
+
+	case key.Matches(msg, m.keys.ClearParent):
+		child := m.targetBranch
+		m.settingParent = false
+		m.parentInput.Blur()
+		m.parentInput.Reset()
+		m.parentCandidates = nil
+		m.parentCursor = 0
+		m.parentOffset = 0
+		return m, doSetParent(child, "")
+
+	case key.Matches(msg, m.keys.Confirm):
+		chosen := ""
+		if len(m.parentCandidates) > 0 {
+			chosen = m.parentCandidates[m.parentCursor]
+		}
+		child := m.targetBranch
+		return m, doSetParent(child, chosen)
+
+	case key.Matches(msg, m.keys.Up):
+		if m.parentCursor > 0 {
+			m.parentCursor--
+			m.clampParentScroll()
+		}
+		return m, nil
+
+	case key.Matches(msg, m.keys.Down):
+		if m.parentCursor < len(m.parentCandidates)-1 {
+			m.parentCursor++
+			m.clampParentScroll()
+		}
+		return m, nil
+	}
+
+	// All other keys go to the parent textinput; rebuild candidates on change.
+	prev := m.parentInput.Value()
+	var cmd tea.Cmd
+	m.parentInput, cmd = m.parentInput.Update(msg)
+	if m.parentInput.Value() != prev {
+		m.buildParentCandidates()
+	}
+	return m, cmd
+}
+
+// buildParentCandidates filters local branch names (excluding targetBranch)
+// by the current parentInput value and resets the candidate cursor.
+func (m *Model) buildParentCandidates() {
+	q := strings.ToLower(m.parentInput.Value())
+	var candidates []string
+	for _, b := range m.branches {
+		if b.IsRemote || b.Name == m.targetBranch {
+			continue
+		}
+		if q == "" || strings.Contains(strings.ToLower(b.Name), q) {
+			candidates = append(candidates, b.Name)
+		}
+	}
+	m.parentCandidates = candidates
+	m.parentCursor = 0
+	m.parentOffset = 0
+}
+
+func (m *Model) clampParentScroll() {
+	vis := maxParentCandidates
+	if m.parentCursor < m.parentOffset {
+		m.parentOffset = m.parentCursor
+	}
+	if m.parentCursor >= m.parentOffset+vis {
+		m.parentOffset = m.parentCursor - vis + 1
+	}
 }
 
 func (m *Model) applyFilter() {
@@ -432,10 +592,56 @@ func (m Model) renderInfoLines() string {
 	return "\n" + strings.Join(lines, "\n")
 }
 
+// renderParentSuggestions renders the candidate list for set-parent mode.
+// Up to maxParentCandidates lines are shown; the selected row is highlighted.
+func (m Model) renderParentSuggestions() string {
+	var sb strings.Builder
+	header := ui.StyleDim.Render("  set parent of ") +
+		lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(m.targetBranch)
+	sb.WriteString(header + "\n")
+
+	if len(m.parentCandidates) == 0 {
+		sb.WriteString(ui.StyleDim.Render("    (no matches)"))
+		return sb.String()
+	}
+
+	end := m.parentOffset + maxParentCandidates
+	if end > len(m.parentCandidates) {
+		end = len(m.parentCandidates)
+	}
+	for i := m.parentOffset; i < end; i++ {
+		c := m.parentCandidates[i]
+		if i == m.parentCursor {
+			row := lipgloss.NewStyle().
+				Background(ui.ColorCursorBg).
+				Foreground(ui.ColorCursorFg).
+				Bold(true).
+				Width(m.width - 4).
+				Render("  › " + c)
+			sb.WriteString("  " + row + "\n")
+		} else {
+			sb.WriteString("    " + lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(c) + "\n")
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
 func (m Model) footer() string {
 	info := m.renderInfoLines()
 
 	switch {
+	case m.settingParent:
+		suggestions := m.renderParentSuggestions()
+		prompt := ui.StyleKeyHint.Render("p") +
+			ui.StyleDim.Render(" parent: ") +
+			m.parentInput.View()
+		hint := ui.StyleDim.Render("  ↑/↓ navigate  enter confirm  ") +
+			ui.StyleKeyHint.Render("ctrl+d") +
+			ui.StyleDim.Render(" clear  ") +
+			ui.StyleKeyHint.Render("esc") +
+			ui.StyleDim.Render(" cancel")
+		return suggestions + "\n  " + prompt + hint + info
+
 	case m.filtering:
 		prompt := ui.StyleKeyHint.Render("/") +
 			ui.StyleDim.Render(" filter: ") +
@@ -555,11 +761,27 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	return "  " + markerS + sep + prefixS + nameS + sep + statusS + sep + timeS
 }
 
-// ── Git command ────────────────────────────────────────────────────────────
+// ── Git commands ───────────────────────────────────────────────────────────
 
 func doSwitch(name string) tea.Cmd {
 	return func() tea.Msg {
 		return switchDoneMsg{err: git.SwitchBranch(name), name: name}
+	}
+}
+
+func doSetParent(child, parent string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if parent == "" || parent == "(none — clear parent)" {
+			err = git.UnsetParent(child)
+			return parentSetMsg{err: err, child: child, parent: ""}
+		}
+		err = git.SetParent(child, parent)
+		if err != nil {
+			return parentSetMsg{err: err, child: child, parent: parent}
+		}
+		ahead, behind := git.ParentAheadBehind(child, parent)
+		return parentSetMsg{child: child, parent: parent, ahead: ahead, behind: behind}
 	}
 }
 

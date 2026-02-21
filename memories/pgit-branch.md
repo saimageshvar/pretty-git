@@ -8,6 +8,7 @@ Arrow navigation, Enter to switch, `/` to filter, `q` to quit.
 - `cmd/pretty-git-revamp/branch.go` — runner
 - `internal/git/git.go` — ListBranches, SwitchBranch, readAllParents, abbreviateRelTime
 - `internal/ui/branch/model.go` — Bubble Tea model
+- `internal/ui/branch/keymap.go` — key.Binding definitions + help.KeyMap impl
 - `internal/ui/style.go` — shared lipgloss styles
 
 ## Tree view
@@ -24,14 +25,21 @@ using box-drawing characters (`├─`, `└─`, `│`).
 
 ## Column layout
 ```
-"  " + marker(1) + sep(2) + prefix + name + sep(2) + hash(7) + sep(2) + subject(40) + sep(2) + time(5)
+"  " + marker(1) + sep(2) + prefix + name(32) + sep(2) + status(12) + sep(2) + time
 ```
-- `nameColWidth(termWidth) = termWidth - 63` — name gets all remaining space
-- `nameW = nameColWidth - lipgloss.Width(treePrefix)` — prefix borrows from name budget
+- Hash and subject columns removed; replaced by `vs parent` status column
+- Dim column header row rendered above branch rows: Branch · vs parent · Last commit
 - Filter mode: tree stripped, flat matches with no prefix
 
+## Parent status column
+`Branch.ParentAhead/ParentBehind` computed concurrently (one goroutine per branch) via
+`git rev-list --left-right --count branch...parent`. Same mechanism as git's own ahead/behind.
+- `ParentAhead==0` → `✓ merged` (green); `↑N` (yellow); `↑N ↓M` (yellow+red)
+- Empty for branches with no parent or remote branches
+
 ## Footer
-Two lines: key hints + `▶ <full-branch-name>` of focused item (shows full name even when truncated in list).
+`footerInfoLines []footerInfoLine` — ordered slice of info line functions, easy to reorder/extend.
+Current items: `footerNamePin` (full branch name), `footerParentStatusDesc` (plain-English parent status).
 
 ## Timestamps
 `abbreviateRelTime()` in git.go: "30 minutes ago" → "30m", "2 hours ago" → "2h", "11 months ago" → "11mo", etc.

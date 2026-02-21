@@ -93,7 +93,7 @@ func listLocal() ([]Branch, error) {
 		wg.Add(1)
 		go func(name, parent string) {
 			defer wg.Done()
-			a, beh := parentAheadBehind(name, parent)
+			a, beh := ParentAheadBehind(name, parent)
 			ch <- parentResult{name, a, beh}
 		}(b.Name, b.Parent)
 	}
@@ -115,11 +115,11 @@ func listLocal() ([]Branch, error) {
 	return branches, nil
 }
 
-// parentAheadBehind returns how many commits branch is ahead of and behind parent.
+// ParentAheadBehind returns how many commits branch is ahead of and behind parent.
 // Uses `git rev-list --left-right --count branch...parent`:
 //   - left  (ahead)  = commits in branch not in parent
 //   - right (behind) = commits in parent not in branch
-func parentAheadBehind(branch, parent string) (ahead, behind int) {
+func ParentAheadBehind(branch, parent string) (ahead, behind int) {
 	out, err := run("git", "rev-list", "--left-right", "--count", branch+"..."+parent)
 	if err != nil {
 		return 0, 0
@@ -263,6 +263,40 @@ func SwitchBranch(name string) error {
 	cmd := exec.Command("git", "checkout", name)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// SetParent writes `branch.<child>.pgit-parent = <parent>` into local git config.
+func SetParent(child, parent string) error {
+	key := fmt.Sprintf("branch.%s.pgit-parent", child)
+	cmd := exec.Command("git", "config", "--local", key, parent)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// UnsetParent removes the `branch.<child>.pgit-parent` key from local git config.
+func UnsetParent(child string) error {
+	key := fmt.Sprintf("branch.%s.pgit-parent", child)
+	cmd := exec.Command("git", "config", "--local", "--unset", key)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// exit code 5 means key didn't exist — not an error for us
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 5 {
+			return nil
+		}
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			return err
