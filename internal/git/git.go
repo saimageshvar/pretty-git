@@ -404,3 +404,117 @@ func run(name string, args ...string) (string, error) {
 	}
 	return string(out), nil
 }
+
+// ── Log ────────────────────────────────────────────────────────────────────
+
+// Commit holds metadata for one git commit.
+type Commit struct {
+Hash      string // full 40-char hash
+ShortHash string // 7-char abbreviated hash
+Subject   string // first line of commit message
+Author    string // author name
+RelTime   string // "2 hours ago"
+Body      string // full commit message (subject + body, newline-joined)
+}
+
+// CommitDetail holds the extended info loaded on demand for the detail pane.
+type CommitDetail struct {
+Commit
+AuthorEmail string
+AuthorDate  string // absolute date, e.g. "Mon Jan 2 15:04:05 2006 -0700"
+FilesChanged int
+Insertions   int
+Deletions    int
+DiffStat     string // raw `git diff-tree --stat` output
+}
+
+// ListCommits returns up to limit commits reachable from ref (default HEAD).
+func ListCommits(ref string, limit int) ([]Commit, error) {
+	if ref == "" {
+		ref = "HEAD"
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	// Use ASCII Record Separator (0x1e) as field delimiter via git's %x1e escape.
+	// This avoids NUL bytes (which exec rejects) and is safe across all field values.
+	// Format per commit: hash RS short RS author RS reltime RS subject RS body RS
+	const rs = "\x1e"
+	format := "%H%x1e%h%x1e%an%x1e%cr%x1e%s%x1e%b%x1e"
+	out, err := run("git", "log", ref,
+		"--format="+format,
+		"-n", strconv.Itoa(limit),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var commits []Commit
+	fields := strings.Split(out, rs)
+	// Strip leading newlines git inserts between records.
+	var clean []string
+	for _, f := range fields {
+		clean = append(clean, strings.TrimLeft(f, "\n"))
+	}
+	for i := 0; i+5 < len(clean); i += 6 {
+		hash := strings.TrimSpace(clean[i])
+		if hash == "" {
+			continue
+		}
+		commits = append(commits, Commit{
+			Hash:      hash,
+			ShortHash: strings.TrimSpace(clean[i+1]),
+			Author:    strings.TrimSpace(clean[i+2]),
+			RelTime:   strings.TrimSpace(clean[i+3]),
+			Subject:   strings.TrimSpace(clean[i+4]),
+			Body:      strings.TrimSpace(clean[i+5]),
+		})
+	}
+	return commits, nil
+}
+
+// GetCommitDetail fetches extended info (diff stats) for a single commit.
+func GetCommitDetail(hash string) (CommitDetail, error) {
+	// Use ASCII Record Separator (0x1e) as field delimiter.
+	const rs = "\x1e"
+	format := "%an%x1e%ae%x1e%ad%x1e%s%x1e%b%x1e%H%x1e%h%x1e%cr"
+	out, err := run("git", "show", "--no-patch", "--format="+format, hash)
+	if err != nil {
+		return CommitDetail{}, err
+	}
+	fields := strings.Split(strings.TrimLeft(out, "\n"), rs)
+	var d CommitDetail
+	if len(fields) >= 8 {
+		d.Author      = strings.TrimSpace(fields[0])
+		d.AuthorEmail = strings.TrimSpace(fields[1])
+		d.AuthorDate  = strings.TrimSpace(fields[2])
+		d.Subject     = strings.TrimSpace(fields[3])
+		d.Body        = strings.TrimSpace(fields[4])
+		d.Hash        = strings.TrimSpace(fields[5])
+		d.ShortHash   = strings.TrimSpace(fields[6])
+		d.RelTime     = strings.TrimSpace(strings.TrimLeft(fields[7], "\n"))
+	}
+
+	// Diff stat
+	stat, err := run("git", "diff-tree", "--stat", "--no-commit-id", "-r", hash)
+	if err == nil {
+		d.DiffStat = strings.TrimRight(stat, "\n")
+		lines := strings.Split(d.DiffStat, "\n")
+		if len(lines) > 0 {
+			summary := lines[len(lines)-1]
+			// Parse "N file(s) changed, M insertion(s)(+), K deletion(s)(-)"
+			parts := strings.Fields(summary)
+			for pi, p := range parts {
+				switch {
+				case strings.HasPrefix(p, "file") && pi > 0:
+					fmt.Sscanf(parts[pi-1], "%d", &d.FilesChanged)
+				case strings.HasPrefix(p, "insertion") && pi > 0:
+					fmt.Sscanf(parts[pi-1], "%d", &d.Insertions)
+				case strings.HasPrefix(p, "deletion") && pi > 0:
+					fmt.Sscanf(parts[pi-1], "%d", &d.Deletions)
+				}
+			}
+		}
+	}
+	return d, nil
+}

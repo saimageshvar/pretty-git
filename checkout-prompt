@@ -1,0 +1,17 @@
+Feature: Set parent and description during branch creation (checkout -b)
+  Command: pgit checkout -b <branch name> <-p parent-name> <-d description>
+  Parameters along with flags given in <> are optional. Whatever left empty will be asked as an input in TUI form
+  When user gives this, if all 3 (branch name, parent name and description) are given, no TUI will open. We can just show a
+  message saying new branch has been created with below info:
+  Branch: branch-name
+  Parent: parent
+  Desc: description
+
+  When atleast 1 of them is missing, the command will open inline TUI where then can enter each of these fields. branch name and
+   description are text fields. Parent should give parent picker (Tree branch structure with description column alone). It can
+  open in a pane below or pane to the right. I recommend trying both variants, then based on my opinion, retain one. Control it
+  with flags for now
+
+  As usual, check if any of the components present in https://github.com/charmbracelet/bubbletea?tab=readme-ov-file or
+  https://github.com/charmbracelet/huh or https://github.com/charmbracelet/lipgloss is useful
+  Use sub-agents with haiku to fetch and read these docs
