@@ -635,11 +635,12 @@ func (m Model) footer() string {
 		prompt := ui.StyleKeyHint.Render("p") +
 			ui.StyleDim.Render(" parent: ") +
 			m.parentInput.View()
-		hint := ui.StyleDim.Render("  ↑/↓ navigate  enter confirm  ") +
+		desc := lipgloss.NewStyle().Foreground(ui.ColorSubject)
+		hint := desc.Render("  ↑/↓ navigate  enter confirm  ") +
 			ui.StyleKeyHint.Render("ctrl+d") +
-			ui.StyleDim.Render(" clear  ") +
+			desc.Render(" unset parent  ") +
 			ui.StyleKeyHint.Render("esc") +
-			ui.StyleDim.Render(" cancel")
+			desc.Render(" cancel")
 		return suggestions + "\n  " + prompt + hint + info
 
 	case m.filtering:
