@@ -154,7 +154,7 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	h.Width = termWidth
 
 	sp := spinner.New()
-	sp.Spinner = spinner.Dot
+	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Bold(true).Foreground(ui.ColorAccent)
 
 	return Model{
