@@ -358,36 +358,100 @@ func (m Model) focusedName() string {
 	return m.filtered[m.cursor].branch.Name
 }
 
-// namePinLine renders a second footer line showing the full focused branch
-// name — useful when the name is truncated in the tree column.
-func (m Model) namePinLine() string {
+// ── Footer info lines ──────────────────────────────────────────────────────
+//
+// footerInfoLine is a function that produces one contextual footer line.
+// Return "" to omit the line entirely. Reorder or remove entries in
+// footerInfoLines to change what appears below the primary hint/state row.
+
+type footerInfoLine func(m Model) string
+
+// footerInfoLines is the ordered list of contextual lines rendered below the
+// primary state row (key hints / filter prompt / error). Edit this slice to
+// add, remove, or reorder footer info items.
+var footerInfoLines = []footerInfoLine{
+	footerNamePin,
+	footerParentStatusDesc,
+}
+
+// footerNamePin shows the full branch name of the focused row, solving the
+// truncation problem in deep tree paths.
+func footerNamePin(m Model) string {
 	name := m.focusedName()
 	if name == "" {
 		return ""
 	}
-	label := ui.StyleDim.Render("  focus  ")
+	label := ui.StyleDim.Render("  branch  ")
 	value := lipgloss.NewStyle().Foreground(ui.ColorAccent).Render(name)
-	return "\n" + label + value
+	return label + value
+}
+
+// footerParentStatusDesc shows a human-readable description of the focused
+// branch's relationship to its parent branch.
+func footerParentStatusDesc(m Model) string {
+	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
+		return ""
+	}
+	b := m.filtered[m.cursor].branch
+	if b.Parent == "" || b.IsRemote {
+		return ""
+	}
+
+	parent := ui.StyleDim.Render(b.Parent)
+	switch {
+	case b.ParentAhead == 0:
+		return "  " + lipgloss.NewStyle().Foreground(ui.ColorCurrentBranch).Render(
+			fmt.Sprintf("all commits merged into %s", b.Parent),
+		)
+	case b.ParentBehind == 0:
+		return "  " + lipgloss.NewStyle().Foreground(ui.ColorHash).Render(
+			fmt.Sprintf("%d commit(s) ahead of ", b.ParentAhead),
+		) + parent + ui.StyleDim.Render(" · ready to merge")
+	default:
+		ahead := lipgloss.NewStyle().Foreground(ui.ColorHash).Render(
+			fmt.Sprintf("%d commit(s) ahead", b.ParentAhead),
+		)
+		behind := lipgloss.NewStyle().Foreground(ui.ColorError).Render(
+			fmt.Sprintf("%s has %d new commit(s)", b.Parent, b.ParentBehind),
+		)
+		return "  " + ahead + ui.StyleDim.Render(" · ") + behind + ui.StyleDim.Render(" — rebase needed")
+	}
+}
+
+// renderInfoLines collects all non-empty footer info lines into one string.
+func (m Model) renderInfoLines() string {
+	var lines []string
+	for _, fn := range footerInfoLines {
+		if l := fn(m); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(lines, "\n")
 }
 
 func (m Model) footer() string {
+	info := m.renderInfoLines()
+
 	switch {
 	case m.filtering:
 		prompt := ui.StyleKeyHint.Render("/") +
 			ui.StyleDim.Render(" filter: ") +
 			m.filterInput.View()
 		hint := ui.StyleDim.Render("  " + m.help.ShortHelpView(m.keys.filterShortHelp()))
-		return "  " + prompt + hint + m.namePinLine()
+		return "  " + prompt + hint + info
 
 	case m.switching:
 		return ui.StyleDim.Render("  switching branch…")
 
 	case m.err != "":
 		hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
-		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + hints + m.namePinLine()
+		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + hints + info
 
 	default:
-		return "  " + m.help.ShortHelpView(m.keys.ShortHelp()) + m.namePinLine()
+		return "  " + m.help.ShortHelpView(m.keys.ShortHelp()) + info
 	}
 }
 
