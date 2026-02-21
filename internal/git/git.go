@@ -321,6 +321,20 @@ func relTime(ref string, _ bool) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// CreateBranch creates a new local branch from HEAD using `git checkout -b <name>`.
+func CreateBranch(name string) error {
+	cmd := exec.Command("git", "checkout", "-b", name)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
 // SwitchBranch runs `git checkout <name>` and returns any error.
 func SwitchBranch(name string) error {
 	cmd := exec.Command("git", "checkout", name)
