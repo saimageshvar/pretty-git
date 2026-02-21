@@ -16,26 +16,12 @@ import (
 // ── Column widths ──────────────────────────────────────────────────────────
 
 const (
-	colMarker  = 1
-	colName    = 32
-	colHash    = 7
-	colTime    = 13
-	colPad     = 2
+	colMarker = 1
+	colName   = 32
+	colStatus = 12 // "✓ merged", "↑99 ↓99", etc.
+	colPad    = 2
 	maxVisible = 15 // max rows shown at once (inline / fzf-style)
 )
-
-func subjectWidth(termWidth int) int {
-	// 2(indent) + marker + pad + name + pad + hash + pad + subject + pad + time
-	fixed := 2 + colMarker + colPad + colName + colPad + colHash + colPad + colPad + colTime
-	w := termWidth - fixed
-	if w < 15 {
-		return 15
-	}
-	if w > 55 {
-		return 55
-	}
-	return w
-}
 
 // ── renderItem ─────────────────────────────────────────────────────────────
 
@@ -341,6 +327,9 @@ func (m Model) View() string {
 		ui.StyleAccent.Render(m.repoName) + "  " + badge + "\n")
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
 
+	// Column headers
+	sb.WriteString(renderHeaders() + "\n")
+
 	// Branch rows
 	end := m.offset + m.visibleRows
 	if end > len(m.filtered) {
@@ -407,11 +396,44 @@ func (m Model) SwitchedTo() string { return m.switchedTo }
 
 // ── Row rendering ──────────────────────────────────────────────────────────
 
+// renderHeaders returns a dim column header row aligned to the data columns.
+func renderHeaders() string {
+	sep := strings.Repeat(" ", colPad)
+	nameH   := lipgloss.NewStyle().Width(colName).Render(ui.StyleDim.Render("Branch"))
+	statusH := lipgloss.NewStyle().Width(colStatus).Render(ui.StyleDim.Render("vs parent"))
+	timeH   := ui.StyleDim.Render("Last commit")
+	// 2 (left pad) + 1 (marker) + pad + name + pad + status + pad + time
+	return "   " + sep + nameH + sep + statusH + sep + timeH
+}
+
+// parentStatusText returns the display text and its lipgloss style for the
+// parent-status column. Raw text is returned separately so callers can apply
+// a background style on the cursor row.
+func parentStatusText(b git.Branch) (text string, style lipgloss.Style) {
+	if b.Parent == "" || b.IsRemote {
+		return padRight("", colStatus), lipgloss.NewStyle()
+	}
+	switch {
+	case b.ParentAhead == 0:
+		// All commits merged into parent (or nothing committed yet).
+		return padRight("✓ merged", colStatus),
+			lipgloss.NewStyle().Foreground(ui.ColorCurrentBranch)
+	case b.ParentBehind == 0:
+		// Ahead of parent, parent hasn't moved — clean, just unmerged work.
+		return padRight(fmt.Sprintf("↑%d", b.ParentAhead), colStatus),
+			lipgloss.NewStyle().Foreground(ui.ColorHash)
+	default:
+		// Diverged: ahead AND parent has new commits.
+		text = fmt.Sprintf("↑%d ↓%d", b.ParentAhead, b.ParentBehind)
+		return padRight(text, colStatus),
+			lipgloss.NewStyle().Foreground(ui.ColorHash)
+	}
+}
+
 func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	b := item.branch
-	subjectW := subjectWidth(termWidth)
 
-	// Name column width shrinks by the visual width of the tree prefix (raw rune count).
+	// Name column width shrinks by the visual width of the tree prefix (rune count).
 	prefixW := len([]rune(item.treePrefix))
 	nameW := colName - prefixW
 	if nameW < 8 {
@@ -426,45 +448,27 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 		markerChar = "›"
 	}
 
-	nameText := truncate(b.Name, nameW)
-	if b.Ahead > 0 || b.Behind > 0 {
-		ann := ""
-		if b.Ahead > 0 {
-			ann += fmt.Sprintf("↑%d", b.Ahead)
-		}
-		if b.Behind > 0 {
-			ann += fmt.Sprintf("↓%d", b.Behind)
-		}
-		max := nameW - len(ann) - 1
-		if max < 8 {
-			max = 8
-		}
-		nameText = truncate(b.Name, max) + " " + ann
-	}
-	nameText    = padRight(nameText, nameW)
-	hashText    := padRight(b.ShortHash, colHash)
-	subjectText := truncate(b.Subject, subjectW)
-	timeText    := b.RelTime
+	nameText   := padRight(truncate(b.Name, nameW), nameW)
+	statusText, statusStyle := parentStatusText(b)
+	timeText   := b.RelTime
 
 	sep := strings.Repeat(" ", colPad)
 
 	if isSelected {
 		bg := ui.ColorCursorBg
-		bgSep   := lipgloss.NewStyle().Background(bg).Render(sep)
-		markerS := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorAccent).Render(markerChar)
-		prefixS := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDim).Render(item.treePrefix)
-		nameS   := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(nameW).Render(nameText)
-		hashS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorHash).Width(colHash).Render(hashText)
-		subjS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorCursorFg).Width(subjectW).Render(subjectText)
-		timeS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorRelTime).Render(timeText)
-		leftPad := lipgloss.NewStyle().Background(bg).Render("  ")
-		// prefixW + nameW == colName, so total used width is unchanged
-		used := 2 + colMarker + colPad + colName + colPad + colHash + colPad + subjectW + colPad + len([]rune(timeText))
+		bgSep    := lipgloss.NewStyle().Background(bg).Render(sep)
+		markerS  := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorAccent).Render(markerChar)
+		prefixS  := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDim).Render(item.treePrefix)
+		nameS    := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(nameW).Render(nameText)
+		statusS  := statusStyle.Background(bg).Width(colStatus).Render(statusText)
+		timeS    := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorRelTime).Render(timeText)
+		leftPad  := lipgloss.NewStyle().Background(bg).Render("  ")
+		used := 2 + colMarker + colPad + colName + colPad + colStatus + colPad + len([]rune(timeText))
 		trail := ""
 		if termWidth > used {
 			trail = lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", termWidth-used))
 		}
-		return leftPad + markerS + bgSep + prefixS + nameS + bgSep + hashS + bgSep + subjS + bgSep + timeS + trail
+		return leftPad + markerS + bgSep + prefixS + nameS + bgSep + statusS + bgSep + timeS + trail
 	}
 
 	// Normal row
@@ -481,11 +485,10 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 		nameS   = lipgloss.NewStyle().Width(nameW).Render(nameText)
 	}
 
-	hashS    := ui.StyleHash.Render(hashText)
-	subjectS := ui.StyleSubject.Width(subjectW).Render(subjectText)
-	timeS    := ui.StyleRelTime.Render(timeText)
+	statusS := statusStyle.Width(colStatus).Render(statusText)
+	timeS   := ui.StyleRelTime.Render(timeText)
 
-	return "  " + markerS + sep + prefixS + nameS + sep + hashS + sep + subjectS + sep + timeS
+	return "  " + markerS + sep + prefixS + nameS + sep + statusS + sep + timeS
 }
 
 // ── Git command ────────────────────────────────────────────────────────────

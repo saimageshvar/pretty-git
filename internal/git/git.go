@@ -4,21 +4,25 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 // Branch holds metadata about a git branch.
 type Branch struct {
-	Name      string
-	IsCurrent bool
-	IsRemote  bool
-	ShortHash string
-	Subject   string // first line of commit message
-	Upstream  string // e.g. origin/main (empty if none)
-	Ahead     int
-	Behind    int
-	RelTime   string // "2 hours ago"
-	Parent    string // value of branch.<name>.pgit-parent config; empty = root
+	Name         string
+	IsCurrent    bool
+	IsRemote     bool
+	ShortHash    string
+	Subject      string // first line of commit message
+	Upstream     string // e.g. origin/main (empty if none)
+	Ahead        int
+	Behind       int
+	RelTime      string // "2 hours ago"
+	Parent       string // value of branch.<name>.pgit-parent config; empty = root
+	ParentAhead  int    // commits in this branch not yet in parent
+	ParentBehind int    // commits in parent not yet in this branch
 }
 
 // ListBranches returns all local and remote branches, sorted by most recent commit.
@@ -73,7 +77,59 @@ func listLocal() ([]Branch, error) {
 		b.Parent = parents[b.Name]
 		branches = append(branches, b)
 	}
+
+	// Compute parent ahead/behind concurrently for branches that have a parent.
+	type parentResult struct {
+		name   string
+		ahead  int
+		behind int
+	}
+	ch := make(chan parentResult, len(branches))
+	var wg sync.WaitGroup
+	for _, b := range branches {
+		if b.Parent == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(name, parent string) {
+			defer wg.Done()
+			a, beh := parentAheadBehind(name, parent)
+			ch <- parentResult{name, a, beh}
+		}(b.Name, b.Parent)
+	}
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+	statusMap := make(map[string]parentResult)
+	for r := range ch {
+		statusMap[r.name] = r
+	}
+	for i := range branches {
+		if r, ok := statusMap[branches[i].Name]; ok {
+			branches[i].ParentAhead = r.ahead
+			branches[i].ParentBehind = r.behind
+		}
+	}
+
 	return branches, nil
+}
+
+// parentAheadBehind returns how many commits branch is ahead of and behind parent.
+// Uses `git rev-list --left-right --count branch...parent`:
+//   - left  (ahead)  = commits in branch not in parent
+//   - right (behind) = commits in parent not in branch
+func parentAheadBehind(branch, parent string) (ahead, behind int) {
+	out, err := run("git", "rev-list", "--left-right", "--count", branch+"..."+parent)
+	if err != nil {
+		return 0, 0
+	}
+	parts := strings.Fields(strings.TrimSpace(out))
+	if len(parts) == 2 {
+		ahead, _ = strconv.Atoi(parts[0])
+		behind, _ = strconv.Atoi(parts[1])
+	}
+	return
 }
 
 // parseLocalLine parses one line of `git branch -vv` output.
