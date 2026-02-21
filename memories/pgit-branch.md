@@ -37,6 +37,19 @@ using box-drawing characters (`├─`, `└─`, `│`).
 - `ParentAhead==0` → `✓ merged` (green); `↑N` (yellow); `↑N ↓M` (yellow+red)
 - Empty for branches with no parent or remote branches
 
+## Setting parent branch (interactive)
+Press `p` on any local branch to open the parent picker:
+- fzf-style: input filters the candidate list; arrows navigate independently (never sync back to input)
+- `enter` confirms the highlighted candidate → writes `branch.<name>.pgit-parent` via `git config --local`
+- `ctrl+d` unsets the parent (`git config --local --unset`) without opening the picker
+- `esc` clears the filter (if non-empty) or exits the picker (if empty)
+- After save: `ParentAheadBehind` recomputed in-memory, tree rebuilt immediately
+- git operations: `git.SetParent(child, parent)`, `git.UnsetParent(child)`, `git.ParentAheadBehind()` (exported)
+
+### Hint line styling rule
+Key names (`↑/↓`, `enter`, `ctrl+d`, `esc`) → `StyleKeyHint` (blue).
+Descriptions after each key → `ColorHeader` (`#EEEEEE` dark). Never use `ColorDim` or `ColorSubject` for readable text.
+
 ## Footer
 `footerInfoLines []footerInfoLine` — ordered slice of info line functions, easy to reorder/extend.
 Current items: `footerNamePin` (full branch name), `footerParentStatusDesc` (plain-English parent status).
