@@ -16,11 +16,12 @@ import (
 // ── Column widths ──────────────────────────────────────────────────────────
 
 const (
-	colMarker          = 1
-	colName            = 32
-	colStatus          = 12 // "✓ merged", "↑99 ↓99", etc.
-	colPad             = 2
-	maxVisible         = 15 // max rows shown at once (inline / fzf-style)
+	colMarker           = 1
+	colName             = 32
+	colStatus           = 12 // "✓ merged", "↑99 ↓99", etc.
+	colDesc             = 25 // branch description (truncated)
+	colPad              = 2
+	maxVisible          = 15 // max rows shown at once (inline / fzf-style)
 	maxParentCandidates = 4  // suggestion lines shown in set-parent mode
 )
 
@@ -64,6 +65,11 @@ type Model struct {
 	parentCursor     int
 	parentOffset     int
 	targetBranch     string // branch we're setting parent for
+
+	// set-desc mode
+	settingDesc      bool
+	descInput        textinput.Model
+	targetDescBranch string // branch we're setting description for
 }
 
 type switchDoneMsg struct {
@@ -77,6 +83,12 @@ type parentSetMsg struct {
 	parent string // "" means parent was cleared
 	ahead  int
 	behind int
+}
+
+type descSetMsg struct {
+	err    error
+	branch string
+	desc   string // "" means description was cleared
 }
 
 func New(branches []git.Branch, repoName string, termWidth, termHeight int) Model {
@@ -121,11 +133,21 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	pi.Placeholder = "type to filter branches…"
 	pi.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
 
+	// ── descInput ──────────────────────────────────────────────────────────
+	di := textinput.New()
+	di.Prompt = ""
+	di.PromptStyle = lipgloss.NewStyle()
+	di.TextStyle = lipgloss.NewStyle().Foreground(ui.ColorHeader)
+	di.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	di.Placeholder = "short description…"
+	di.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
+	di.CharLimit = 120
+
 	// ── help ───────────────────────────────────────────────────────────────
 	h := help.New()
 	h.Styles.ShortKey = lipgloss.NewStyle().Bold(true).Foreground(ui.ColorKeyHint)
-	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(ui.ColorDim)
-	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(ui.ColorHeader)
+	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(ui.ColorTreeConnector)
 	h.Width = termWidth
 
 	return Model{
@@ -139,6 +161,7 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 		remoteCount: remote,
 		filterInput: ti,
 		parentInput: pi,
+		descInput:   di,
 		help:        h,
 		keys:        defaultKeyMap(),
 	}
@@ -200,7 +223,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		return m, nil
 
+	case descSetMsg:
+		m.settingDesc = false
+		m.descInput.Blur()
+		m.descInput.Reset()
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		// Update the branch in-memory so the footer reflects the new desc immediately.
+		for i := range m.branches {
+			if m.branches[i].Name == msg.branch {
+				m.branches[i].Description = msg.desc
+				break
+			}
+		}
+		m.treeItems = buildRenderItems(m.branches)
+		m.filtered = m.treeItems
+		m.applyFilter()
+		return m, nil
+
 	case tea.KeyMsg:
+		if m.settingDesc {
+			return m.updateSetDesc(msg)
+		}
 		if m.settingParent {
 			return m.updateSetParent(msg)
 		}
@@ -243,6 +289,21 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.parentInput.Reset()
 		m.buildParentCandidates()
 		return m, m.parentInput.Focus()
+
+	case key.Matches(msg, m.keys.SetDesc):
+		if len(m.filtered) == 0 {
+			return m, nil
+		}
+		b := m.filtered[m.cursor].branch
+		if b.IsRemote {
+			return m, nil
+		}
+		m.targetDescBranch = b.Name
+		m.settingDesc = true
+		m.err = ""
+		// Pre-fill with existing description so user can edit rather than retype.
+		m.descInput.SetValue(b.Description)
+		return m, m.descInput.Focus()
 
 	case key.Matches(msg, m.keys.Quit):
 		m.quitting = true
@@ -405,6 +466,29 @@ func (m Model) updateSetParent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) updateSetDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Clear):
+		m.settingDesc = false
+		m.descInput.Blur()
+		m.descInput.Reset()
+		return m, nil
+
+	case key.Matches(msg, m.keys.Quit):
+		m.quitting = true
+		return m, tea.Quit
+
+	case key.Matches(msg, m.keys.Confirm):
+		desc := strings.TrimSpace(m.descInput.Value())
+		branch := m.targetDescBranch
+		return m, doSetDesc(branch, desc)
+	}
+
+	var cmd tea.Cmd
+	m.descInput, cmd = m.descInput.Update(msg)
+	return m, cmd
+}
+
 // buildParentCandidates filters local branch names (excluding targetBranch)
 // by the current parentInput value and resets the candidate cursor.
 func (m *Model) buildParentCandidates() {
@@ -531,6 +615,7 @@ type footerInfoLine func(m Model) string
 // add, remove, or reorder footer info items.
 var footerInfoLines = []footerInfoLine{
 	footerNamePin,
+	footerBranchDesc,
 	footerParentStatusDesc,
 }
 
@@ -542,7 +627,21 @@ func footerNamePin(m Model) string {
 		return ""
 	}
 	label := ui.StyleDim.Render("  branch  ")
-	value := lipgloss.NewStyle().Foreground(ui.ColorAccent).Render(name)
+	value := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true).Render(name)
+	return label + value
+}
+
+// footerBranchDesc shows the pgit-desc of the focused branch, if set.
+func footerBranchDesc(m Model) string {
+	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
+		return ""
+	}
+	b := m.filtered[m.cursor].branch
+	if b.Description == "" || b.IsRemote {
+		return ""
+	}
+	label := ui.StyleDim.Render("  desc    ")
+	value := lipgloss.NewStyle().Foreground(ui.ColorDesc).Italic(true).Render(b.Description)
 	return label + value
 }
 
@@ -557,24 +656,25 @@ func footerParentStatusDesc(m Model) string {
 		return ""
 	}
 
-	parent := ui.StyleDim.Render(b.Parent)
+	parent := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(b.Parent)
 	switch {
 	case b.ParentAhead == 0:
-		return "  " + lipgloss.NewStyle().Foreground(ui.ColorCurrentBranch).Render(
-			fmt.Sprintf("all commits merged into %s", b.Parent),
-		)
+		return "  " + lipgloss.NewStyle().Foreground(ui.ColorParentMerged).Bold(true).Render("✓") +
+			ui.StyleDim.Render(" all commits merged into ") + parent
 	case b.ParentBehind == 0:
-		return "  " + lipgloss.NewStyle().Foreground(ui.ColorHash).Render(
-			fmt.Sprintf("%d commit(s) ahead of ", b.ParentAhead),
-		) + parent + ui.StyleDim.Render(" · ready to merge")
+		ahead := lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render(
+			fmt.Sprintf("↑%d", b.ParentAhead),
+		)
+		return "  " + ahead + ui.StyleDim.Render(" ahead of ") + parent + ui.StyleDim.Render(" · ready to merge")
 	default:
-		ahead := lipgloss.NewStyle().Foreground(ui.ColorHash).Render(
-			fmt.Sprintf("%d commit(s) ahead", b.ParentAhead),
+		ahead := lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render(
+			fmt.Sprintf("↑%d", b.ParentAhead),
 		)
-		behind := lipgloss.NewStyle().Foreground(ui.ColorError).Render(
-			fmt.Sprintf("%s has %d new commit(s)", b.Parent, b.ParentBehind),
+		behind := lipgloss.NewStyle().Foreground(ui.ColorParentDiverged).Bold(true).Render(
+			fmt.Sprintf("↓%d", b.ParentBehind),
 		)
-		return "  " + ahead + ui.StyleDim.Render(" · ") + behind + ui.StyleDim.Render(" — rebase needed")
+		return "  " + ahead + ui.StyleDim.Render(" ahead · ") + behind + ui.StyleDim.Render(" behind ") +
+			parent + ui.StyleDim.Render(" — rebase needed")
 	}
 }
 
@@ -596,8 +696,8 @@ func (m Model) renderInfoLines() string {
 // Up to maxParentCandidates lines are shown; the selected row is highlighted.
 func (m Model) renderParentSuggestions() string {
 	var sb strings.Builder
-	header := ui.StyleDim.Render("  set parent of ") +
-		lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(m.targetBranch)
+	header := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render("  ⎇ set parent of ") +
+		lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true).Render(m.targetBranch)
 	sb.WriteString(header + "\n")
 
 	if len(m.parentCandidates) == 0 {
@@ -630,6 +730,18 @@ func (m Model) footer() string {
 	info := m.renderInfoLines()
 
 	switch {
+	case m.settingDesc:
+		header := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render("  ✎ set desc of ") +
+			lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true).Render(m.targetDescBranch)
+		prompt := ui.StyleKeyHint.Render("d") +
+			ui.StyleDim.Render(" desc: ") +
+			m.descInput.View()
+		dc := lipgloss.NewStyle().Foreground(ui.ColorHeader)
+		hint := "  " +
+			ui.StyleKeyHint.Render("enter") + dc.Render(" save  ") +
+			ui.StyleKeyHint.Render("esc") + dc.Render(" cancel")
+		return header + "\n  " + prompt + hint + info
+
 	case m.settingParent:
 		suggestions := m.renderParentSuggestions()
 		prompt := ui.StyleKeyHint.Render("p") +
@@ -651,7 +763,7 @@ func (m Model) footer() string {
 		return "  " + prompt + hint + info
 
 	case m.switching:
-		return ui.StyleDim.Render("  switching branch…")
+		return lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render("  ⟳ switching branch…")
 
 	case m.err != "":
 		hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
@@ -672,9 +784,9 @@ func renderHeaders() string {
 	sep := strings.Repeat(" ", colPad)
 	nameH   := lipgloss.NewStyle().Width(colName).Render(ui.StyleDim.Render("Branch"))
 	statusH := lipgloss.NewStyle().Width(colStatus).Render(ui.StyleDim.Render("vs parent"))
+	descH   := lipgloss.NewStyle().Width(colDesc).Render(ui.StyleDim.Render("Description"))
 	timeH   := ui.StyleDim.Render("Last commit")
-	// 2 (left pad) + 1 (marker) + pad + name + pad + status + pad + time
-	return "   " + sep + nameH + sep + statusH + sep + timeH
+	return "   " + sep + nameH + sep + statusH + sep + descH + sep + timeH
 }
 
 // parentStatusText returns the display text and its lipgloss style for the
@@ -688,16 +800,16 @@ func parentStatusText(b git.Branch) (text string, style lipgloss.Style) {
 	case b.ParentAhead == 0:
 		// All commits merged into parent (or nothing committed yet).
 		return padRight("✓ merged", colStatus),
-			lipgloss.NewStyle().Foreground(ui.ColorCurrentBranch)
+			lipgloss.NewStyle().Foreground(ui.ColorParentMerged)
 	case b.ParentBehind == 0:
 		// Ahead of parent, parent hasn't moved — clean, just unmerged work.
 		return padRight(fmt.Sprintf("↑%d", b.ParentAhead), colStatus),
-			lipgloss.NewStyle().Foreground(ui.ColorHash)
+			lipgloss.NewStyle().Foreground(ui.ColorParentAhead)
 	default:
-		// Diverged: ahead AND parent has new commits.
+		// Diverged: ahead AND parent has new commits — warning orange.
 		text = fmt.Sprintf("↑%d ↓%d", b.ParentAhead, b.ParentBehind)
 		return padRight(text, colStatus),
-			lipgloss.NewStyle().Foreground(ui.ColorHash)
+			lipgloss.NewStyle().Foreground(ui.ColorParentDiverged)
 	}
 }
 
@@ -721,6 +833,7 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 
 	nameText   := padRight(truncate(b.Name, nameW), nameW)
 	statusText, statusStyle := parentStatusText(b)
+	descText   := padRight(truncate(b.Description, colDesc), colDesc)
 	timeText   := b.RelTime
 
 	sep := strings.Repeat(" ", colPad)
@@ -732,14 +845,15 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 		prefixS  := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDim).Render(item.treePrefix)
 		nameS    := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(nameW).Render(nameText)
 		statusS  := statusStyle.Background(bg).Width(colStatus).Render(statusText)
+		descS    := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDesc).Italic(true).Width(colDesc).Render(descText)
 		timeS    := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorRelTime).Render(timeText)
 		leftPad  := lipgloss.NewStyle().Background(bg).Render("  ")
-		used := 2 + colMarker + colPad + colName + colPad + colStatus + colPad + len([]rune(timeText))
+		used := 2 + colMarker + colPad + colName + colPad + colStatus + colPad + colDesc + colPad + len([]rune(timeText))
 		trail := ""
 		if termWidth > used {
 			trail = lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", termWidth-used))
 		}
-		return leftPad + markerS + bgSep + prefixS + nameS + bgSep + statusS + bgSep + timeS + trail
+		return leftPad + markerS + bgSep + prefixS + nameS + bgSep + statusS + bgSep + descS + bgSep + timeS + trail
 	}
 
 	// Normal row
@@ -757,9 +871,10 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	}
 
 	statusS := statusStyle.Width(colStatus).Render(statusText)
+	descS   := ui.StyleDesc.Italic(true).Width(colDesc).Render(descText)
 	timeS   := ui.StyleRelTime.Render(timeText)
 
-	return "  " + markerS + sep + prefixS + nameS + sep + statusS + sep + timeS
+	return "  " + markerS + sep + prefixS + nameS + sep + statusS + sep + descS + sep + timeS
 }
 
 // ── Git commands ───────────────────────────────────────────────────────────
@@ -783,6 +898,18 @@ func doSetParent(child, parent string) tea.Cmd {
 		}
 		ahead, behind := git.ParentAheadBehind(child, parent)
 		return parentSetMsg{child: child, parent: parent, ahead: ahead, behind: behind}
+	}
+}
+
+func doSetDesc(branch, desc string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if desc == "" {
+			err = git.UnsetDescription(branch)
+		} else {
+			err = git.SetDescription(branch, desc)
+		}
+		return descSetMsg{err: err, branch: branch, desc: desc}
 	}
 }
 

@@ -23,6 +23,7 @@ type Branch struct {
 	Parent       string // value of branch.<name>.pgit-parent config; empty = root
 	ParentAhead  int    // commits in this branch not yet in parent
 	ParentBehind int    // commits in parent not yet in this branch
+	Description  string // value of branch.<name>.pgit-desc config; empty = none
 }
 
 // ListBranches returns all local and remote branches, sorted by most recent commit.
@@ -60,8 +61,9 @@ func listLocal() ([]Branch, error) {
 		return nil, err
 	}
 
-	// Read all pgit-parent values in one git config call instead of one per branch.
+	// Read all pgit-parent and pgit-desc values in one git config call each.
 	parents := readAllParents()
+	descs := readAllDescriptions()
 
 	var branches []Branch
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
@@ -75,6 +77,7 @@ func listLocal() ([]Branch, error) {
 		t, _ := relTime(b.Name, false)
 		b.RelTime = t
 		b.Parent = parents[b.Name]
+		b.Description = descs[b.Name]
 		branches = append(branches, b)
 	}
 
@@ -247,6 +250,66 @@ func readAllParents() map[string]string {
 		parents[name] = val
 	}
 	return parents
+}
+
+// readAllDescriptions reads all pgit-desc config values and returns a map of
+// branch name → description.
+func readAllDescriptions() map[string]string {
+	out, err := run("git", "config", "--local", "--list")
+	if err != nil {
+		return nil
+	}
+	descs := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, ".pgit-desc=") {
+			continue
+		}
+		kv := strings.SplitN(line, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		key := kv[0]
+		val := kv[1]
+		if !strings.HasPrefix(key, "branch.") || !strings.HasSuffix(key, ".pgit-desc") {
+			continue
+		}
+		name := key[len("branch.") : len(key)-len(".pgit-desc")]
+		descs[name] = val
+	}
+	return descs
+}
+
+// SetDescription writes `branch.<name>.pgit-desc = <desc>` into local git config.
+func SetDescription(branch, desc string) error {
+	key := fmt.Sprintf("branch.%s.pgit-desc", branch)
+	cmd := exec.Command("git", "config", "--local", key, desc)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// UnsetDescription removes the `branch.<name>.pgit-desc` key from local git config.
+func UnsetDescription(branch string) error {
+	key := fmt.Sprintf("branch.%s.pgit-desc", branch)
+	cmd := exec.Command("git", "config", "--local", "--unset", key)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 5 {
+			return nil
+		}
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
 }
 
 // relTime returns the relative time of the last commit on a branch.

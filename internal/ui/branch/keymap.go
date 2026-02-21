@@ -13,6 +13,7 @@ type keyMap struct {
 	Quit      key.Binding
 	SetParent   key.Binding
 	ClearParent key.Binding
+	SetDesc     key.Binding
 
 	// Filter-mode bindings
 	Confirm key.Binding
@@ -50,6 +51,10 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("ctrl+d"),
 			key.WithHelp("ctrl+d", "clear parent"),
 		),
+		SetDesc: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "set desc"),
+		),
 		Confirm: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "confirm"),
@@ -63,7 +68,7 @@ func defaultKeyMap() keyMap {
 
 // ShortHelp implements help.KeyMap — shown in normal navigation mode.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Switch, k.Filter, k.SetParent, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Switch, k.Filter, k.SetParent, k.SetDesc, k.Quit}
 }
 
 // FullHelp implements help.KeyMap — not used, but required by the interface.
