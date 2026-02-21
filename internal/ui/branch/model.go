@@ -635,7 +635,7 @@ func (m Model) footer() string {
 		prompt := ui.StyleKeyHint.Render("p") +
 			ui.StyleDim.Render(" parent: ") +
 			m.parentInput.View()
-		desc := lipgloss.NewStyle().Foreground(ui.ColorSubject)
+		desc := lipgloss.NewStyle().Foreground(ui.ColorHeader)
 		hint := desc.Render("  ↑/↓ navigate  enter confirm  ") +
 			ui.StyleKeyHint.Render("ctrl+d") +
 			desc.Render(" unset parent  ") +
