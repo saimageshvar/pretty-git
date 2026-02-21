@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sai/pretty-git-revamp/internal/git"
@@ -51,7 +54,6 @@ type Model struct {
 	filtered    []renderItem   // active list (tree mode or flat filter mode)
 	cursor      int
 	offset      int
-	filter      string
 	filtering   bool
 	err         string
 	switching   bool
@@ -63,6 +65,10 @@ type Model struct {
 	repoName    string
 	localCount  int
 	remoteCount int
+
+	filterInput textinput.Model
+	help        help.Model
+	keys        keyMap
 }
 
 type switchDoneMsg struct {
@@ -94,6 +100,22 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 		vis = 1
 	}
 
+	// ── textinput ──────────────────────────────────────────────────────────
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.PromptStyle = lipgloss.NewStyle()
+	ti.TextStyle = lipgloss.NewStyle().Foreground(ui.ColorHeader)
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	ti.Placeholder = "type to filter…"
+	ti.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
+
+	// ── help ───────────────────────────────────────────────────────────────
+	h := help.New()
+	h.Styles.ShortKey = lipgloss.NewStyle().Bold(true).Foreground(ui.ColorKeyHint)
+	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	h.Width = termWidth
+
 	return Model{
 		branches:    branches,
 		treeItems:   treeItems,
@@ -103,6 +125,9 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 		repoName:    repoName,
 		localCount:  local,
 		remoteCount: remote,
+		filterInput: ti,
+		help:        h,
+		keys:        defaultKeyMap(),
 	}
 }
 
@@ -115,6 +140,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.help.Width = msg.Width
 		vis := len(m.filtered)
 		if vis > maxVisible {
 			vis = maxVisible
@@ -149,24 +175,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "up", "k":
+	switch {
+	case key.Matches(msg, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
 			m.clampScroll()
 		}
-	case "down", "j":
+	case key.Matches(msg, m.keys.Down):
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
 			m.clampScroll()
 		}
-	case "/":
+	case key.Matches(msg, m.keys.Filter):
 		m.filtering = true
 		m.err = ""
-	case "q", "ctrl+c":
+		return m, m.filterInput.Focus()
+	case key.Matches(msg, m.keys.Quit):
 		m.quitting = true
 		return m, tea.Quit
-	case "enter":
+	case key.Matches(msg, m.keys.Switch):
 		if m.switching || len(m.filtered) == 0 {
 			return m, nil
 		}
@@ -189,14 +216,16 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	switch {
+	case key.Matches(msg, m.keys.Clear):
 		m.filtering = false
+		m.filterInput.Blur()
+		// Save cursor position by branch name before clearing
 		var savedName string
 		if len(m.filtered) > 0 && m.cursor < len(m.filtered) {
 			savedName = m.filtered[m.cursor].branch.Name
 		}
-		m.filter = ""
+		m.filterInput.Reset()
 		m.applyFilter()
 		// Restore cursor to same branch in tree view
 		if savedName != "" {
@@ -208,15 +237,18 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-	case "ctrl+c":
+		return m, nil
+
+	case key.Matches(msg, m.keys.Quit):
 		m.quitting = true
 		return m, tea.Quit
-	case "enter":
-		// Confirm filter and switch to navigation mode
+
+	case key.Matches(msg, m.keys.Confirm):
 		if len(m.filtered) > 0 {
 			b := m.filtered[m.cursor].branch
 			if !b.IsCurrent {
 				m.filtering = false
+				m.filterInput.Blur()
 				m.switching = true
 				m.err = ""
 				name := b.Name
@@ -230,37 +262,38 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.filtering = false
-	case "up", "k":
+		m.filterInput.Blur()
+		return m, nil
+
+	case key.Matches(msg, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
 			m.clampScroll()
 		}
-	case "down", "j":
+		return m, nil
+
+	case key.Matches(msg, m.keys.Down):
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
 			m.clampScroll()
 		}
-	case "backspace", "ctrl+h":
-		if len(m.filter) > 0 {
-			m.filter = string([]rune(m.filter)[:len([]rune(m.filter))-1])
-			m.applyFilter()
-		}
-	default:
-		if len(msg.Runes) == 1 {
-			m.filter += string(msg.Runes)
-			m.applyFilter()
-		}
+		return m, nil
 	}
-	return m, nil
+
+	// All other keys go to the textinput
+	var cmd tea.Cmd
+	m.filterInput, cmd = m.filterInput.Update(msg)
+	m.applyFilter()
+	return m, cmd
 }
 
 func (m *Model) applyFilter() {
-	if m.filter == "" {
+	q := strings.ToLower(m.filterInput.Value())
+	if q == "" {
 		// Restore full tree view
 		m.filtered = m.treeItems
 	} else {
 		// Flat filter mode: strip tree connectors, show plain sorted matches
-		q := strings.ToLower(m.filter)
 		var out []renderItem
 		for _, b := range m.branches {
 			if strings.Contains(strings.ToLower(b.Name), q) {
@@ -319,7 +352,6 @@ func (m Model) View() string {
 		for i := m.offset; i < end; i++ {
 			sb.WriteString(renderRow(m.filtered[i], i == m.cursor, m.width) + "\n")
 		}
-
 	}
 
 	// Footer
@@ -330,28 +362,23 @@ func (m Model) View() string {
 }
 
 func (m Model) footer() string {
-	hints := "  " +
-		ui.StyleKeyHint.Render("↑↓") + ui.StyleDim.Render(" navigate") +
-		ui.StyleDim.Render("   ") +
-		ui.StyleKeyHint.Render("enter") + ui.StyleDim.Render(" switch") +
-		ui.StyleDim.Render("   ") +
-		ui.StyleKeyHint.Render("/") + ui.StyleDim.Render(" filter") +
-		ui.StyleDim.Render("   ") +
-		ui.StyleKeyHint.Render("q") + ui.StyleDim.Render(" quit")
-
 	switch {
 	case m.filtering:
-		prompt := ui.StyleKeyHint.Render("/") + ui.StyleDim.Render(" filter: ") +
-			lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(m.filter) +
-			lipgloss.NewStyle().Foreground(ui.ColorAccent).Render("█") // cursor
-		hint := ui.StyleDim.Render("  esc clear · enter confirm")
+		prompt := ui.StyleKeyHint.Render("/") +
+			ui.StyleDim.Render(" filter: ") +
+			m.filterInput.View()
+		hint := ui.StyleDim.Render("  " + m.help.ShortHelpView(m.keys.filterShortHelp()))
 		return "  " + prompt + hint
+
 	case m.switching:
 		return ui.StyleDim.Render("  switching branch…")
+
 	case m.err != "":
+		hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
 		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + hints
+
 	default:
-		return hints
+		return "  " + m.help.ShortHelpView(m.keys.ShortHelp())
 	}
 }
 
@@ -425,17 +452,17 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	var markerS, nameS string
 	if b.IsCurrent {
 		markerS = ui.StyleCurrentBranch.Render(markerChar)
-		nameS   = ui.StyleCurrentBranch.Copy().Width(nameW).Render(nameText)
+		nameS   = ui.StyleCurrentBranch.Width(nameW).Render(nameText)
 	} else if b.IsRemote {
 		markerS = " "
-		nameS   = ui.StyleRemoteName.Copy().Width(nameW).Render(nameText)
+		nameS   = ui.StyleRemoteName.Width(nameW).Render(nameText)
 	} else {
 		markerS = " "
 		nameS   = lipgloss.NewStyle().Width(nameW).Render(nameText)
 	}
 
 	hashS    := ui.StyleHash.Render(hashText)
-	subjectS := ui.StyleSubject.Copy().Width(subjectW).Render(subjectText)
+	subjectS := ui.StyleSubject.Width(subjectW).Render(subjectText)
 	timeS    := ui.StyleRelTime.Render(timeText)
 
 	return "  " + markerS + sep + prefixS + nameS + sep + hashS + sep + subjectS + sep + timeS
@@ -546,5 +573,3 @@ func buildRenderItems(branches []git.Branch) []renderItem {
 
 	return result
 }
-
-
