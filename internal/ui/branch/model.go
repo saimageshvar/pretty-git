@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -70,6 +71,8 @@ type Model struct {
 	settingDesc      bool
 	descInput        textinput.Model
 	targetDescBranch string // branch we're setting description for
+
+	spinner spinner.Model
 }
 
 type switchDoneMsg struct {
@@ -150,6 +153,10 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(ui.ColorTreeConnector)
 	h.Width = termWidth
 
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Bold(true).Foreground(ui.ColorAccent)
+
 	return Model{
 		branches:    branches,
 		treeItems:   treeItems,
@@ -164,15 +171,21 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 		descInput:   di,
 		help:        h,
 		keys:        defaultKeyMap(),
+		spinner:     sp,
 	}
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return m.spinner.Tick }
 
 // ── Update ─────────────────────────────────────────────────────────────────
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -731,7 +744,7 @@ func (m Model) footer() string {
 
 	switch {
 	case m.settingDesc:
-		header := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render("  ✎ set desc of ") +
+		header := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render("  "+m.spinner.View()+" set desc of ") +
 			lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true).Render(m.targetDescBranch)
 		prompt := ui.StyleKeyHint.Render("d") +
 			ui.StyleDim.Render(" desc: ") +
@@ -744,7 +757,8 @@ func (m Model) footer() string {
 
 	case m.settingParent:
 		suggestions := m.renderParentSuggestions()
-		prompt := ui.StyleKeyHint.Render("p") +
+		prompt := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render(m.spinner.View()) +
+			ui.StyleKeyHint.Render(" p") +
 			ui.StyleDim.Render(" parent: ") +
 			m.parentInput.View()
 		desc := lipgloss.NewStyle().Foreground(ui.ColorHeader)
@@ -763,7 +777,7 @@ func (m Model) footer() string {
 		return "  " + prompt + hint + info
 
 	case m.switching:
-		return lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render("  ⟳ switching branch…")
+		return lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render("  " + m.spinner.View() + " switching branch…")
 
 	case m.err != "":
 		hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
@@ -828,7 +842,7 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	case b.IsCurrent:
 		markerChar = "★"
 	case isSelected:
-		markerChar = "›"
+		markerChar = "»"
 	}
 
 	nameText   := padRight(truncate(b.Name, nameW), nameW)
