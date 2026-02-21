@@ -361,6 +361,26 @@ func (m Model) View() string {
 	return sb.String()
 }
 
+// focusedName returns the full branch name under the cursor, or "" if none.
+func (m Model) focusedName() string {
+	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
+		return ""
+	}
+	return m.filtered[m.cursor].branch.Name
+}
+
+// namePinLine renders a second footer line showing the full focused branch
+// name — useful when the name is truncated in the tree column.
+func (m Model) namePinLine() string {
+	name := m.focusedName()
+	if name == "" {
+		return ""
+	}
+	label := ui.StyleDim.Render("  focus  ")
+	value := lipgloss.NewStyle().Foreground(ui.ColorAccent).Render(name)
+	return "\n" + label + value
+}
+
 func (m Model) footer() string {
 	switch {
 	case m.filtering:
@@ -368,17 +388,17 @@ func (m Model) footer() string {
 			ui.StyleDim.Render(" filter: ") +
 			m.filterInput.View()
 		hint := ui.StyleDim.Render("  " + m.help.ShortHelpView(m.keys.filterShortHelp()))
-		return "  " + prompt + hint
+		return "  " + prompt + hint + m.namePinLine()
 
 	case m.switching:
 		return ui.StyleDim.Render("  switching branch…")
 
 	case m.err != "":
 		hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
-		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + hints
+		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + hints + m.namePinLine()
 
 	default:
-		return "  " + m.help.ShortHelpView(m.keys.ShortHelp())
+		return "  " + m.help.ShortHelpView(m.keys.ShortHelp()) + m.namePinLine()
 	}
 }
 
