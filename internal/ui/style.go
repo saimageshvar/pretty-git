@@ -69,4 +69,7 @@ var (
 
 	StyleDivider = lipgloss.NewStyle().
 			Foreground(ColorDivider)
+
+	StyleTreeConnector = lipgloss.NewStyle().
+				Foreground(ColorDim)
 )

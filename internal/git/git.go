@@ -18,6 +18,7 @@ type Branch struct {
 	Ahead     int
 	Behind    int
 	RelTime   string // "2 hours ago"
+	Parent    string // value of branch.<name>.pgit-parent config; empty = root
 }
 
 // ListBranches returns all local and remote branches, sorted by most recent commit.
@@ -55,6 +56,9 @@ func listLocal() ([]Branch, error) {
 		return nil, err
 	}
 
+	// Read all pgit-parent values in one git config call instead of one per branch.
+	parents := readAllParents()
+
 	var branches []Branch
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		if line == "" {
@@ -66,6 +70,7 @@ func listLocal() ([]Branch, error) {
 		}
 		t, _ := relTime(b.Name, false)
 		b.RelTime = t
+		b.Parent = parents[b.Name]
 		branches = append(branches, b)
 	}
 	return branches, nil
@@ -156,6 +161,36 @@ func listRemote() ([]Branch, error) {
 		branches = append(branches, b)
 	}
 	return branches, nil
+}
+
+// readAllParents reads all pgit-parent config values in a single git config
+// call and returns a map of branch name → parent branch name.
+func readAllParents() map[string]string {
+	out, err := run("git", "config", "--local", "--list")
+	if err != nil {
+		return nil
+	}
+	parents := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		// Format: branch.<name>.pgit-parent=<value>
+		if !strings.Contains(line, ".pgit-parent=") {
+			continue
+		}
+		kv := strings.SplitN(line, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		// key: branch.<name>.pgit-parent  (name may contain dots, e.g. "feat/x.y")
+		key := kv[0]
+		val := kv[1]
+		// Strip "branch." prefix and ".pgit-parent" suffix
+		if !strings.HasPrefix(key, "branch.") || !strings.HasSuffix(key, ".pgit-parent") {
+			continue
+		}
+		name := key[len("branch.") : len(key)-len(".pgit-parent")]
+		parents[name] = val
+	}
+	return parents
 }
 
 // relTime returns the relative time of the last commit on a branch.

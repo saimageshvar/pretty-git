@@ -34,11 +34,21 @@ func subjectWidth(termWidth int) int {
 	return w
 }
 
+// ── renderItem ─────────────────────────────────────────────────────────────
+
+// renderItem wraps a Branch with pre-computed tree display metadata.
+type renderItem struct {
+	branch     git.Branch
+	treePrefix string // pre-colored ANSI string, e.g. "│  ├─ "
+	depth      int    // 0 = root
+}
+
 // ── Model ──────────────────────────────────────────────────────────────────
 
 type Model struct {
-	branches    []git.Branch
-	filtered    []git.Branch
+	branches    []git.Branch   // raw, unchanged
+	treeItems   []renderItem   // full tree, built once at startup
+	filtered    []renderItem   // active list (tree mode or flat filter mode)
 	cursor      int
 	offset      int
 	filter      string
@@ -70,7 +80,9 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 		}
 	}
 
-	vis := len(branches)
+	treeItems := buildRenderItems(branches)
+
+	vis := len(treeItems)
 	if vis > maxVisible {
 		vis = maxVisible
 	}
@@ -84,7 +96,8 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 
 	return Model{
 		branches:    branches,
-		filtered:    branches,
+		treeItems:   treeItems,
+		filtered:    treeItems,
 		width:       termWidth,
 		visibleRows: vis,
 		repoName:    repoName,
@@ -157,7 +170,7 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.switching || len(m.filtered) == 0 {
 			return m, nil
 		}
-		b := m.filtered[m.cursor]
+		b := m.filtered[m.cursor].branch
 		if b.IsCurrent {
 			return m, nil
 		}
@@ -179,15 +192,29 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.filtering = false
+		var savedName string
+		if len(m.filtered) > 0 && m.cursor < len(m.filtered) {
+			savedName = m.filtered[m.cursor].branch.Name
+		}
 		m.filter = ""
 		m.applyFilter()
+		// Restore cursor to same branch in tree view
+		if savedName != "" {
+			for i, item := range m.filtered {
+				if item.branch.Name == savedName {
+					m.cursor = i
+					m.clampScroll()
+					break
+				}
+			}
+		}
 	case "ctrl+c":
 		m.quitting = true
 		return m, tea.Quit
 	case "enter":
 		// Confirm filter and switch to navigation mode
 		if len(m.filtered) > 0 {
-			b := m.filtered[m.cursor]
+			b := m.filtered[m.cursor].branch
 			if !b.IsCurrent {
 				m.filtering = false
 				m.switching = true
@@ -229,13 +256,15 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) applyFilter() {
 	if m.filter == "" {
-		m.filtered = m.branches
+		// Restore full tree view
+		m.filtered = m.treeItems
 	} else {
+		// Flat filter mode: strip tree connectors, show plain sorted matches
 		q := strings.ToLower(m.filter)
-		var out []git.Branch
+		var out []renderItem
 		for _, b := range m.branches {
 			if strings.Contains(strings.ToLower(b.Name), q) {
-				out = append(out, b)
+				out = append(out, renderItem{branch: b})
 			}
 		}
 		m.filtered = out
@@ -290,6 +319,7 @@ func (m Model) View() string {
 		for i := m.offset; i < end; i++ {
 			sb.WriteString(renderRow(m.filtered[i], i == m.cursor, m.width) + "\n")
 		}
+
 	}
 
 	// Footer
@@ -330,8 +360,16 @@ func (m Model) SwitchedTo() string { return m.switchedTo }
 
 // ── Row rendering ──────────────────────────────────────────────────────────
 
-func renderRow(b git.Branch, isSelected bool, termWidth int) string {
+func renderRow(item renderItem, isSelected bool, termWidth int) string {
+	b := item.branch
 	subjectW := subjectWidth(termWidth)
+
+	// Name column width shrinks by the visual width of the tree prefix (raw rune count).
+	prefixW := len([]rune(item.treePrefix))
+	nameW := colName - prefixW
+	if nameW < 8 {
+		nameW = 8
+	}
 
 	markerChar := " "
 	switch {
@@ -341,7 +379,7 @@ func renderRow(b git.Branch, isSelected bool, termWidth int) string {
 		markerChar = "›"
 	}
 
-	nameText := truncate(b.Name, colName)
+	nameText := truncate(b.Name, nameW)
 	if b.Ahead > 0 || b.Behind > 0 {
 		ann := ""
 		if b.Ahead > 0 {
@@ -350,13 +388,13 @@ func renderRow(b git.Branch, isSelected bool, termWidth int) string {
 		if b.Behind > 0 {
 			ann += fmt.Sprintf("↓%d", b.Behind)
 		}
-		max := colName - len(ann) - 1
+		max := nameW - len(ann) - 1
 		if max < 8 {
 			max = 8
 		}
 		nameText = truncate(b.Name, max) + " " + ann
 	}
-	nameText    = padRight(nameText, colName)
+	nameText    = padRight(nameText, nameW)
 	hashText    := padRight(b.ShortHash, colHash)
 	subjectText := truncate(b.Subject, subjectW)
 	timeText    := b.RelTime
@@ -365,41 +403,42 @@ func renderRow(b git.Branch, isSelected bool, termWidth int) string {
 
 	if isSelected {
 		bg := ui.ColorCursorBg
-		bgSep := lipgloss.NewStyle().Background(bg).Render(sep)
-		// Each cell gets the same bg; spacers also carry it → continuous highlight
+		bgSep   := lipgloss.NewStyle().Background(bg).Render(sep)
 		markerS := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorAccent).Render(markerChar)
-		nameS   := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(colName).Render(nameText)
+		prefixS := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDim).Render(item.treePrefix)
+		nameS   := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(nameW).Render(nameText)
 		hashS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorHash).Width(colHash).Render(hashText)
 		subjS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorCursorFg).Width(subjectW).Render(subjectText)
 		timeS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorRelTime).Render(timeText)
 		leftPad := lipgloss.NewStyle().Background(bg).Render("  ")
-		// Trailing pad fills to terminal width
+		// prefixW + nameW == colName, so total used width is unchanged
 		used := 2 + colMarker + colPad + colName + colPad + colHash + colPad + subjectW + colPad + len([]rune(timeText))
 		trail := ""
 		if termWidth > used {
 			trail = lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", termWidth-used))
 		}
-		return leftPad + markerS + bgSep + nameS + bgSep + hashS + bgSep + subjS + bgSep + timeS + trail
+		return leftPad + markerS + bgSep + prefixS + nameS + bgSep + hashS + bgSep + subjS + bgSep + timeS + trail
 	}
 
 	// Normal row
+	prefixS := ui.StyleTreeConnector.Render(item.treePrefix)
 	var markerS, nameS string
 	if b.IsCurrent {
 		markerS = ui.StyleCurrentBranch.Render(markerChar)
-		nameS   = ui.StyleCurrentBranch.Copy().Width(colName).Render(nameText)
+		nameS   = ui.StyleCurrentBranch.Copy().Width(nameW).Render(nameText)
 	} else if b.IsRemote {
 		markerS = " "
-		nameS   = ui.StyleRemoteName.Copy().Width(colName).Render(nameText)
+		nameS   = ui.StyleRemoteName.Copy().Width(nameW).Render(nameText)
 	} else {
 		markerS = " "
-		nameS   = lipgloss.NewStyle().Width(colName).Render(nameText)
+		nameS   = lipgloss.NewStyle().Width(nameW).Render(nameText)
 	}
 
 	hashS    := ui.StyleHash.Render(hashText)
 	subjectS := ui.StyleSubject.Copy().Width(subjectW).Render(subjectText)
 	timeS    := ui.StyleRelTime.Render(timeText)
 
-	return "  " + markerS + sep + nameS + sep + hashS + sep + subjectS + sep + timeS
+	return "  " + markerS + sep + prefixS + nameS + sep + hashS + sep + subjectS + sep + timeS
 }
 
 // ── Git command ────────────────────────────────────────────────────────────
@@ -427,3 +466,85 @@ func padRight(s string, w int) string {
 	}
 	return s + strings.Repeat(" ", w-len(r))
 }
+
+// ── Tree builder ───────────────────────────────────────────────────────────
+
+// buildRenderItems converts a flat branch list into a DFS-ordered []renderItem.
+// Each local branch's Parent field is used to build the hierarchy; branches
+// with no parent (or an unknown parent) become roots. Remote branches are
+// appended flat after the local tree with no connectors.
+func buildRenderItems(branches []git.Branch) []renderItem {
+	// Index local branch names for parent look-up
+	nameToIdx := make(map[string]int)
+	for i, b := range branches {
+		if !b.IsRemote {
+			nameToIdx[b.Name] = i
+		}
+	}
+
+	// Build children map: "" = roots, branchName = children of that branch
+	children := make(map[string][]git.Branch)
+	for _, b := range branches {
+		if b.IsRemote {
+			continue
+		}
+		if b.Parent != "" {
+			if _, ok := nameToIdx[b.Parent]; ok {
+				children[b.Parent] = append(children[b.Parent], b)
+				continue
+			}
+		}
+		children[""] = append(children[""], b)
+	}
+
+	var result []renderItem
+
+	// DFS from virtual root, building box-drawing connector strings
+	var dfs func(parentName string, isLastAtDepth []bool)
+	dfs = func(parentName string, isLastAtDepth []bool) {
+		kids := children[parentName]
+		for i, b := range kids {
+			isLast := i == len(kids)-1
+			depth := len(isLastAtDepth)
+
+			// Build raw (no ANSI) connector string
+			prefix := ""
+			for d := 0; d < depth; d++ {
+				if isLastAtDepth[d] {
+					prefix += "   "
+				} else {
+					prefix += "│  "
+				}
+			}
+			if isLast {
+				prefix += "└─ "
+			} else {
+				prefix += "├─ "
+			}
+
+			result = append(result, renderItem{
+				branch:     b,
+				treePrefix: prefix,
+				depth:      depth,
+			})
+
+			next := make([]bool, depth+1)
+			copy(next, isLastAtDepth)
+			next[depth] = isLast
+			dfs(b.Name, next)
+		}
+	}
+
+	dfs("", []bool{})
+
+	// Append remote branches flat (no tree connectors)
+	for _, b := range branches {
+		if b.IsRemote {
+			result = append(result, renderItem{branch: b})
+		}
+	}
+
+	return result
+}
+
+
