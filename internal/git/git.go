@@ -428,8 +428,23 @@ Deletions    int
 DiffStat     string // raw `git diff-tree --stat` output
 }
 
+// CommitFilters controls optional filtering for ListCommits.
+type CommitFilters struct {
+	OnlyAuthorEmail string // empty = all authors
+	SkipMerges      bool
+}
+
+// CurrentUserEmail returns the value of `git config user.email`, or "".
+func CurrentUserEmail() string {
+	out, err := run("git", "config", "user.email")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 // ListCommits returns up to limit commits reachable from ref (default HEAD).
-func ListCommits(ref string, limit int) ([]Commit, error) {
+func ListCommits(ref string, limit int, filters CommitFilters) ([]Commit, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
@@ -441,10 +456,14 @@ func ListCommits(ref string, limit int) ([]Commit, error) {
 	// Format per commit: hash RS short RS author RS reltime RS subject RS body RS
 	const rs = "\x1e"
 	format := "%H%x1e%h%x1e%an%x1e%cr%x1e%s%x1e%b%x1e"
-	out, err := run("git", "log", ref,
-		"--format="+format,
-		"-n", strconv.Itoa(limit),
-	)
+	args := []string{"log", ref, "--format=" + format, "-n", strconv.Itoa(limit)}
+	if filters.OnlyAuthorEmail != "" {
+		args = append(args, "--author="+filters.OnlyAuthorEmail)
+	}
+	if filters.SkipMerges {
+		args = append(args, "--no-merges")
+	}
+	out, err := run("git", args...)
 	if err != nil {
 		return nil, err
 	}

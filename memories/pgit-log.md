@@ -7,12 +7,12 @@ Inline split-pane TUI for browsing git log. Left pane = commit list; right pane 
 ```
 pgit log [<ref>]
 ```
-- `ref` defaults to `HEAD`; any branch/tag/hash works
+- `ref` defaults to `HEAD`; any branch/tag/hash works (most useful as a branch name, e.g. `pgit log main`)
 - Fetches up to 200 commits via `git.ListCommits`
 
 ## Key files
 - `cmd/pretty-git/log.go` — runner (parses ref, gets terminal size, runs TUI)
-- `internal/git/git.go` — `Commit`, `CommitDetail`, `ListCommits`, `GetCommitDetail`
+- `internal/git/git.go` — `Commit`, `CommitDetail`, `ListCommits`, `GetCommitDetail`, `CommitFilters`, `CurrentUserEmail`
 - `internal/ui/log/model.go` — Bubble Tea model
 - `internal/ui/log/keymap.go` — key bindings
 
@@ -20,6 +20,7 @@ pgit log [<ref>]
 ```
   Log  <ref>  <repo>  [N commits]
   ─────────────────────────────────────────────────────────────
+  [ ] My commits    [ ] Skip merges   f to filter
   Hash      Subject                  Author          When    │  Detail
   <list rows × visibleRows>                                   │  <detail rows × visibleRows>
   ─────────────────────────────────────────────────────────────
@@ -55,23 +56,46 @@ Content order:
 - **Last visible row** of detail pane: bold italic `↓ N more lines` in amber replaces the row when content extends below; disappears when fully scrolled
 
 ## Navigation & pane focus
-| Key        | Context      | Action                          |
-|------------|-------------|----------------------------------|
-| `↑/↓` `k/j` | list focused | navigate commit list            |
-| `→` / `l`  | list focused | focus detail pane (if loaded)   |
-| `↑/↓` `k/j` | detail focused | scroll detail pane            |
-| `←` / `h`  | detail focused | return to list pane            |
-| `PgUp/PgDn` `ctrl+u/d` | either | page scroll               |
-| `q` `esc` `ctrl+c` | either | quit                       |
+Three focus states: `paneList`, `paneFilters`, `paneDetail`.
+
+| Key              | Context         | Action                               |
+|------------------|-----------------|--------------------------------------|
+| `↑/↓` `k/j`      | list focused    | navigate commit list                 |
+| `→` / `l`        | list focused    | focus detail pane (if loaded)        |
+| `f`              | list focused    | focus filter bar                     |
+| `↑/↓` `k/j`      | detail focused  | scroll detail pane                   |
+| `←` / `h`        | detail focused  | return to list pane                  |
+| `←/→` `h/l`      | filters focused | move cursor between checkboxes       |
+| `space`          | filters focused | toggle focused checkbox + re-fetch   |
+| `esc` / `f` / `enter` | filters focused | return to list pane             |
+| `PgUp/PgDn` `ctrl+u/d` | list/detail | page scroll                     |
+| `q` `ctrl+c`     | any             | quit                                 |
 
 Footer help hints update to reflect current pane context.
 
+## Filter bar
+- Two checkboxes: **My commits** (`--author=<user.email>`) and **Skip merges** (`--no-merges`)
+- Rendered as `[✓]/[ ]` using lipgloss; focused checkbox uses `Reverse(true)` highlight
+- Toggling a checkbox triggers an async `doFetchCommits` re-fetch; a `filterGeneration` counter drops stale responses
+- Spinner shown inline while re-fetch is in flight
+
 ## Git data layer
-### `git.ListCommits(ref string, limit int) ([]Commit, error)`
-- `git log <ref> --format=<fmt> -n <limit>`
+### `git.ListCommits(ref string, limit int, filters CommitFilters) ([]Commit, error)`
+- `git log <ref> --format=<fmt> -n <limit> [--author=<email>] [--no-merges]`
 - Format uses `%x1e` (ASCII Record Separator 0x1e) as field delimiter — NUL-safe for exec args
 - Fields per commit (6): `%H %x1e %h %x1e %an %x1e %cr %x1e %s %x1e %b %x1e`
 - Parsed by splitting on `\x1e`, trimming leading newlines, grouping in 6s
+
+### `git.CommitFilters`
+```go
+type CommitFilters struct {
+    OnlyAuthorEmail string // empty = all authors
+    SkipMerges      bool
+}
+```
+
+### `git.CurrentUserEmail() string`
+- Reads `git config user.email`; used to populate `model.userEmail` at startup
 
 ### `git.GetCommitDetail(hash string) (CommitDetail, error)`
 - `git show --no-patch --format=<fmt> <hash>` — same `%x1e` delimiter
@@ -80,5 +104,9 @@ Footer help hints update to reflect current pane context.
 - Insertions/deletions parsed from summary line by scanning `fields[pi-1]` before "insertion"/"deletion" tokens
 
 ## Spinner
-`spinner.MiniDot` (braille ⠋⠙⠹…) shown in detail pane row 0 while async load is in flight.
+`spinner.MiniDot` (braille ⠋⠙⠹…) shown in:
+- Detail pane row 0 while async detail load is in flight
+- Filter bar while commit list re-fetch is in flight
+
 Detail hash is pre-set in `New()` to ensure the first load's response is accepted (`detailHash = commits[0].Hash`, `loading = true`).
+
