@@ -18,7 +18,7 @@ func runLog() {
 		ref = os.Args[2]
 	}
 
-	commits, err := git.ListCommits(ref, 200)
+	commits, err := git.ListCommits(ref, 200, git.CommitFilters{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
 		os.Exit(1)

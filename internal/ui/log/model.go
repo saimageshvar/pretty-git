@@ -33,6 +33,12 @@ type detailLoadedMsg struct {
 	err    error
 }
 
+type commitsReloadedMsg struct {
+	commits    []git.Commit
+	err        error
+	generation int
+}
+
 // ── Model ───────────────────────────────────────────────────────────────────
 
 type Model struct {
@@ -53,6 +59,14 @@ type Model struct {
 	detailOffset int
 
 	loading bool
+
+	// Filters
+	filterOnlyMine   bool
+	filterSkipMerges bool
+	filterCursor     int  // 0 = My commits, 1 = Skip merges
+	userEmail        string
+	listLoading      bool // true while re-fetching after a filter change
+	filterGeneration int  // incremented each filter toggle to drop stale results
 
 	help    help.Model
 	keys    keyMap
@@ -85,6 +99,7 @@ func New(commits []git.Commit, repoName, ref string, termWidth, termHeight int) 
 		height:      termHeight,
 		repoName:    repoName,
 		ref:         ref,
+		userEmail:   git.CurrentUserEmail(),
 		help:        h,
 		keys:        defaultKeyMap(),
 		spinner:     sp,
@@ -131,6 +146,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case commitsReloadedMsg:
+		if msg.generation != m.filterGeneration {
+			return m, nil // stale result from a superseded request
+		}
+		m.listLoading = false
+		if msg.err == nil {
+			m.commits = msg.commits
+			m.cursor = 0
+			m.offset = 0
+			m.clampScroll()
+			if len(m.commits) > 0 {
+				m.detailHash = m.commits[0].Hash
+				m.detail = nil
+				m.detailLines = nil
+				m.detailOffset = 0
+				m.loading = true
+				return m, tea.Batch(m.spinner.Tick, doLoadDetail(m.commits[0].Hash))
+			}
+			m.detailHash = ""
+			m.detail = nil
+			m.detailLines = nil
+		}
+		return m, nil
+
 	case detailLoadedMsg:
 		m.loading = false
 		if msg.err == nil && msg.hash == m.detailHash {
@@ -141,6 +180,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// ── Filter bar has focus ───────────────────────────────────────────
+		if m.focusedPane == paneFilters {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				return m, tea.Quit
+			case key.Matches(msg, m.keys.FilterExit):
+				m.focusedPane = paneList
+			case key.Matches(msg, m.keys.FilterLeft):
+				if m.filterCursor > 0 {
+					m.filterCursor--
+				}
+			case key.Matches(msg, m.keys.FilterRight):
+				if m.filterCursor < 1 {
+					m.filterCursor++
+				}
+			case key.Matches(msg, m.keys.FilterToggle):
+				m.filterGeneration++
+				switch m.filterCursor {
+				case 0:
+					m.filterOnlyMine = !m.filterOnlyMine
+				case 1:
+					m.filterSkipMerges = !m.filterSkipMerges
+				}
+				m.listLoading = true
+				return m, doFetchCommits(m.ref, m.currentFilters(), m.filterGeneration)
+			}
+			return m, nil
+		}
+
 		// ── Detail pane has focus ──────────────────────────────────────────
 		if m.focusedPane == paneDetail {
 			switch {
@@ -170,6 +238,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
+		case key.Matches(msg, m.keys.FocusFilters):
+			m.focusedPane = paneFilters
 		case key.Matches(msg, m.keys.FocusDetail):
 			if m.detail != nil {
 				m.focusedPane = paneDetail
@@ -216,6 +286,21 @@ func (m *Model) triggerLoad() tea.Cmd {
 	return doLoadDetail(hash)
 }
 
+func (m Model) currentFilters() git.CommitFilters {
+	f := git.CommitFilters{SkipMerges: m.filterSkipMerges}
+	if m.filterOnlyMine {
+		f.OnlyAuthorEmail = m.userEmail
+	}
+	return f
+}
+
+func doFetchCommits(ref string, filters git.CommitFilters, gen int) tea.Cmd {
+	return func() tea.Msg {
+		commits, err := git.ListCommits(ref, 200, filters)
+		return commitsReloadedMsg{commits: commits, err: err, generation: gen}
+	}
+}
+
 func (m *Model) clampScroll() {
 	if m.cursor < m.offset {
 		m.offset = m.cursor
@@ -247,6 +332,9 @@ func (m Model) View() string {
 		ui.StyleAccent.Render(m.repoName) + "  " + badge + "\n")
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
 
+	// ── Filter bar ──────────────────────────────────────────────────────────
+	sb.WriteString(m.renderFilterBar() + "\n")
+
 	// ── Column headers ───────────────────────────────────────────────────────
 	sb.WriteString(m.renderColHeaders(lw, dw) + "\n")
 
@@ -255,13 +343,55 @@ func (m Model) View() string {
 
 	// ── Footer ──────────────────────────────────────────────────────────────
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
-	if m.focusedPane == paneDetail {
+	switch m.focusedPane {
+	case paneFilters:
+		sb.WriteString("  " + m.help.ShortHelpView(m.keys.filterHelp()))
+	case paneDetail:
 		sb.WriteString("  " + m.help.ShortHelpView(m.keys.detailHelp()))
-	} else {
+	default:
 		sb.WriteString("  " + m.help.ShortHelpView(m.keys.listHelp()))
 	}
 
 	return sb.String()
+}
+
+// renderFilterBar renders the checkbox filter row.
+func (m Model) renderFilterBar() string {
+	focused := m.focusedPane == paneFilters
+	mine := renderCheckbox("My commits", m.filterOnlyMine, focused && m.filterCursor == 0)
+	merges := renderCheckbox("Skip merges", m.filterSkipMerges, focused && m.filterCursor == 1)
+
+	var hint string
+	if focused {
+		hint = ui.StyleDim.Render("  ←/→ move · space toggle · esc done")
+	} else {
+		hint = ui.StyleDim.Render("  f to filter")
+	}
+
+	bar := "  " + mine + "    " + merges + hint
+	if m.listLoading {
+		bar += "  " + m.spinner.View()
+	}
+	return bar
+}
+
+// renderCheckbox renders a [✓]/[ ] checkbox. When focused, the whole item is
+// highlighted with a reverse-video style so it's clearly the active cursor.
+func renderCheckbox(label string, checked bool, focused bool) string {
+	var box string
+	if checked {
+		box = "[✓]"
+	} else {
+		box = "[ ]"
+	}
+	combined := box + " " + label
+	if focused {
+		return lipgloss.NewStyle().Reverse(true).Bold(true).Padding(0, 1).Render(combined)
+	}
+	if checked {
+		return lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(combined)
+	}
+	return ui.StyleDim.Render(combined)
 }
 
 // listWidth returns the pixel/char width of the left (list) pane.
