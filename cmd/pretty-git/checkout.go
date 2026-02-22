@@ -43,7 +43,15 @@ func runCheckout(args []string) {
 	parent := *parentFlag
 	desc := *descFlag
 
-	// ── All three provided: create directly without TUI ────────────────────
+	// Auto-prefill parent from the current branch when not explicitly provided.
+	// initialParent is used for the TUI form; parent (flag value) drives the
+	// "skip TUI" shortcut so auto-fill never bypasses the form.
+	initialParent := parent
+	if initialParent == "" {
+		initialParent = git.CurrentBranch()
+	}
+
+	// ── All three provided via flags: create directly without TUI ──────────
 	if branchName != "" && parent != "" && desc != "" {
 		if err := git.CreateBranch(branchName); err != nil {
 			fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
@@ -74,7 +82,7 @@ func runCheckout(args []string) {
 	}
 
 	m := checkoutui.New(branches, repoName, width, height,
-		branchName, parent, desc)
+		branchName, initialParent, desc)
 
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
 	result, err := p.Run()

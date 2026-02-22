@@ -383,6 +383,20 @@ func UnsetParent(child string) error {
 	return nil
 }
 
+// CurrentBranch returns the name of the currently checked-out branch,
+// or "" if HEAD is detached or the command fails.
+func CurrentBranch() string {
+	out, err := run("git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(out)
+	if name == "HEAD" {
+		return "" // detached HEAD
+	}
+	return name
+}
+
 // RepoName returns the basename of the current git repository root.
 func RepoName() string {
 	out, err := run("git", "rev-parse", "--show-toplevel")

@@ -17,13 +17,19 @@ import (
 // ── Column widths ──────────────────────────────────────────────────────────
 
 const (
-	colMarker           = 1
-	colName             = 32
-	colStatus           = 12 // "✓ merged", "↑99 ↓99", etc.
-	colDesc             = 25 // branch description (truncated)
-	colPad              = 2
-	maxVisible          = 15 // max rows shown at once (inline / fzf-style)
-	maxParentCandidates = 4  // suggestion lines shown in set-parent mode
+	colMarker  = 1
+	colName    = 32
+	colStatus  = 12 // "✓ merged", "↑99 ↓99", etc.
+	colDesc    = 25 // branch description (truncated)
+	colPad     = 2
+	maxVisible = 15 // max rows shown at once (inline / fzf-style)
+
+	// edit form
+	editFocusParent   = 0
+	editFocusDesc     = 1
+	editLabelW        = 15
+	editInputW        = 36
+	maxEditPickerRows = 9
 )
 
 // ── renderItem ─────────────────────────────────────────────────────────────
@@ -59,18 +65,18 @@ type Model struct {
 	help        help.Model
 	keys        keyMap
 
-	// set-parent mode
-	settingParent    bool
-	parentInput      textinput.Model
-	parentCandidates []string // filtered local branch names
-	parentCursor     int
-	parentOffset     int
-	targetBranch     string // branch we're setting parent for
-
-	// set-desc mode
-	settingDesc      bool
-	descInput        textinput.Model
-	targetDescBranch string // branch we're setting description for
+	// unified edit mode (replaces old settingParent + settingDesc modes)
+	editing           bool
+	editTargetBranch  string
+	editFocused       int // editFocusParent | editFocusDesc
+	editParentFilter  textinput.Model
+	editAllItems      []renderItem // full picker tree (local only, excl. target)
+	editPickerItems   []renderItem // filtered subset
+	editParentCursor  int
+	editParentOffset  int
+	editSelectedParent string
+	editDescInput     textinput.Model
+	editSaving        bool
 
 	spinner spinner.Model
 }
@@ -80,18 +86,13 @@ type switchDoneMsg struct {
 	name string
 }
 
-type parentSetMsg struct {
-	err    error
-	child  string
-	parent string // "" means parent was cleared
-	ahead  int
-	behind int
-}
-
-type descSetMsg struct {
+type editSavedMsg struct {
 	err    error
 	branch string
-	desc   string // "" means description was cleared
+	parent string // "" = cleared
+	desc   string // "" = cleared
+	ahead  int
+	behind int
 }
 
 func New(branches []git.Branch, repoName string, termWidth, termHeight int) Model {
@@ -118,7 +119,7 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 		vis = 1
 	}
 
-	// ── textinput ──────────────────────────────────────────────────────────
+	// ── filter textinput ───────────────────────────────────────────────────
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.PromptStyle = lipgloss.NewStyle()
@@ -127,24 +128,23 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	ti.Placeholder = "type to filter…"
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
 
-	// ── parentInput ────────────────────────────────────────────────────────
-	pi := textinput.New()
-	pi.Prompt = ""
-	pi.PromptStyle = lipgloss.NewStyle()
-	pi.TextStyle = lipgloss.NewStyle().Foreground(ui.ColorHeader)
-	pi.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
-	pi.Placeholder = "type to filter branches…"
-	pi.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
+	// ── edit-form textinputs (initialised empty; populated on open) ────────
+	epf := textinput.New()
+	epf.Prompt = ""
+	epf.PromptStyle = lipgloss.NewStyle()
+	epf.TextStyle = lipgloss.NewStyle().Foreground(ui.ColorHeader)
+	epf.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	epf.Placeholder = "type to filter…"
+	epf.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
 
-	// ── descInput ──────────────────────────────────────────────────────────
-	di := textinput.New()
-	di.Prompt = ""
-	di.PromptStyle = lipgloss.NewStyle()
-	di.TextStyle = lipgloss.NewStyle().Foreground(ui.ColorHeader)
-	di.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
-	di.Placeholder = "short description…"
-	di.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
-	di.CharLimit = 120
+	edi := textinput.New()
+	edi.Prompt = ""
+	edi.PromptStyle = lipgloss.NewStyle()
+	edi.TextStyle = lipgloss.NewStyle().Foreground(ui.ColorHeader)
+	edi.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	edi.Placeholder = "short description…"
+	edi.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
+	edi.CharLimit = 120
 
 	// ── help ───────────────────────────────────────────────────────────────
 	h := help.New()
@@ -158,20 +158,20 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	sp.Style = lipgloss.NewStyle().Bold(true).Foreground(ui.ColorAccent)
 
 	return Model{
-		branches:    branches,
-		treeItems:   treeItems,
-		filtered:    treeItems,
-		width:       termWidth,
-		visibleRows: vis,
-		repoName:    repoName,
-		localCount:  local,
-		remoteCount: remote,
-		filterInput: ti,
-		parentInput: pi,
-		descInput:   di,
-		help:        h,
-		keys:        defaultKeyMap(),
-		spinner:     sp,
+		branches:         branches,
+		treeItems:        treeItems,
+		filtered:         treeItems,
+		width:            termWidth,
+		visibleRows:      vis,
+		repoName:         repoName,
+		localCount:       local,
+		remoteCount:      remote,
+		filterInput:      ti,
+		editParentFilter: epf,
+		editDescInput:    edi,
+		help:             h,
+		keys:             defaultKeyMap(),
+		spinner:          sp,
 	}
 }
 
@@ -214,39 +214,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.done = true
 		return m, tea.Quit
 
-	case parentSetMsg:
-		m.settingParent = false
-		m.parentInput.Blur()
-		m.parentInput.Reset()
+	case editSavedMsg:
+		m.editSaving = false
 		if msg.err != nil {
 			m.err = msg.err.Error()
+			m.closeEditForm()
 			return m, nil
 		}
-		// Update the branch in-memory so the tree reflects the new parent immediately.
+		// Update in-memory branch data so the view reflects changes immediately.
 		for i := range m.branches {
-			if m.branches[i].Name == msg.child {
+			if m.branches[i].Name == msg.branch {
 				m.branches[i].Parent = msg.parent
 				m.branches[i].ParentAhead = msg.ahead
 				m.branches[i].ParentBehind = msg.behind
-				break
-			}
-		}
-		m.treeItems = buildRenderItems(m.branches)
-		m.filtered = m.treeItems
-		m.applyFilter()
-		return m, nil
-
-	case descSetMsg:
-		m.settingDesc = false
-		m.descInput.Blur()
-		m.descInput.Reset()
-		if msg.err != nil {
-			m.err = msg.err.Error()
-			return m, nil
-		}
-		// Update the branch in-memory so the footer reflects the new desc immediately.
-		for i := range m.branches {
-			if m.branches[i].Name == msg.branch {
 				m.branches[i].Description = msg.desc
 				break
 			}
@@ -254,14 +234,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.treeItems = buildRenderItems(m.branches)
 		m.filtered = m.treeItems
 		m.applyFilter()
+		m.closeEditForm()
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.settingDesc {
-			return m.updateSetDesc(msg)
-		}
-		if m.settingParent {
-			return m.updateSetParent(msg)
+		if m.editing {
+			return m.updateEdit(msg)
 		}
 		if m.filtering {
 			return m.updateFilter(msg)
@@ -287,23 +265,8 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 		m.err = ""
 		return m, m.filterInput.Focus()
-	case key.Matches(msg, m.keys.SetParent):
-		if len(m.filtered) == 0 {
-			return m, nil
-		}
-		b := m.filtered[m.cursor].branch
-		if b.IsRemote {
-			return m, nil
-		}
-		m.targetBranch = b.Name
-		m.settingParent = true
-		m.err = ""
-		// Always start with an empty filter input; sentinel provides the clear option.
-		m.parentInput.Reset()
-		m.buildParentCandidates()
-		return m, m.parentInput.Focus()
 
-	case key.Matches(msg, m.keys.SetDesc):
+	case key.Matches(msg, m.keys.Edit):
 		if len(m.filtered) == 0 {
 			return m, nil
 		}
@@ -311,16 +274,12 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if b.IsRemote {
 			return m, nil
 		}
-		m.targetDescBranch = b.Name
-		m.settingDesc = true
-		m.err = ""
-		// Pre-fill with existing description so user can edit rather than retype.
-		m.descInput.SetValue(b.Description)
-		return m, m.descInput.Focus()
+		return m.openEditForm(b)
 
 	case key.Matches(msg, m.keys.Quit):
 		m.quitting = true
 		return m, tea.Quit
+
 	case key.Matches(msg, m.keys.Switch):
 		if m.switching || len(m.filtered) == 0 {
 			return m, nil
@@ -415,157 +374,191 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) updateSetParent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, m.keys.Clear):
-		if m.parentInput.Value() != "" {
-			// Clear filter, stay in set-parent mode.
-			m.parentInput.Reset()
-			m.buildParentCandidates()
+// ── Edit form ──────────────────────────────────────────────────────────────
+
+func (m Model) openEditForm(b git.Branch) (tea.Model, tea.Cmd) {
+	m.editing = true
+	m.editTargetBranch = b.Name
+	m.editFocused = editFocusParent
+	m.editSelectedParent = b.Parent
+	m.editSaving = false
+	m.err = ""
+
+	m.editParentFilter.Reset()
+	m.editDescInput.SetValue(b.Description)
+
+	// Build picker items (local branches, excluding the target)
+	m.editAllItems = buildEditPickerItems(m.branches, b.Name)
+	m.editPickerItems = m.editAllItems
+	m.editParentCursor = 0
+	m.editParentOffset = 0
+	m.editPreselectParent()
+
+	return m, m.editParentFilter.Focus()
+}
+
+func (m *Model) closeEditForm() {
+	m.editing = false
+	m.editTargetBranch = ""
+	m.editSelectedParent = ""
+	m.editParentFilter.Blur()
+	m.editParentFilter.Reset()
+	m.editDescInput.Blur()
+	m.editDescInput.Reset()
+	m.editAllItems = nil
+	m.editPickerItems = nil
+	m.editParentCursor = 0
+	m.editParentOffset = 0
+}
+
+func (m Model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.editSaving {
+		return m, nil
+	}
+
+	k := msg.String()
+	switch k {
+	case "ctrl+c", "esc":
+		m.closeEditForm()
+		return m, nil
+
+	case "tab":
+		return m.editMoveFocus(1)
+
+	case "shift+tab":
+		return m.editMoveFocus(-1)
+
+	case "enter":
+		return m.editHandleEnter()
+
+	case "up":
+		if m.editFocused == editFocusParent && len(m.editPickerItems) > 0 {
+			if m.editParentCursor > 0 {
+				m.editParentCursor--
+				m.editClampScroll()
+			}
 			return m, nil
 		}
-		// Already empty — exit set-parent mode.
-		m.settingParent = false
-		m.parentInput.Blur()
-		m.parentCandidates = nil
-		m.parentCursor = 0
-		m.parentOffset = 0
-		return m, nil
 
-	case key.Matches(msg, m.keys.Quit):
-		m.quitting = true
-		return m, tea.Quit
-
-	case key.Matches(msg, m.keys.ClearParent):
-		child := m.targetBranch
-		m.settingParent = false
-		m.parentInput.Blur()
-		m.parentInput.Reset()
-		m.parentCandidates = nil
-		m.parentCursor = 0
-		m.parentOffset = 0
-		return m, doSetParent(child, "")
-
-	case key.Matches(msg, m.keys.Confirm):
-		chosen := ""
-		if len(m.parentCandidates) > 0 {
-			chosen = m.parentCandidates[m.parentCursor]
+	case "down":
+		if m.editFocused == editFocusParent && len(m.editPickerItems) > 0 {
+			if m.editParentCursor < len(m.editPickerItems)-1 {
+				m.editParentCursor++
+				m.editClampScroll()
+			}
+			return m, nil
 		}
-		child := m.targetBranch
-		return m, doSetParent(child, chosen)
 
-	case key.Matches(msg, m.keys.Up):
-		if m.parentCursor > 0 {
-			m.parentCursor--
-			m.clampParentScroll()
+	case "ctrl+d":
+		if m.editFocused == editFocusParent {
+			m.editSelectedParent = ""
+			m.editParentFilter.Reset()
+			m.editApplyFilter()
+			return m, nil
 		}
-		return m, nil
-
-	case key.Matches(msg, m.keys.Down):
-		if m.parentCursor < len(m.parentCandidates)-1 {
-			m.parentCursor++
-			m.clampParentScroll()
-		}
-		return m, nil
 	}
 
-	// All other keys go to the parent textinput; rebuild candidates on change.
-	prev := m.parentInput.Value()
+	// Route keypress to the focused textinput
+	switch m.editFocused {
+	case editFocusParent:
+		prev := m.editParentFilter.Value()
+		var cmd tea.Cmd
+		m.editParentFilter, cmd = m.editParentFilter.Update(msg)
+		if m.editParentFilter.Value() != prev {
+			m.editApplyFilter()
+		}
+		return m, cmd
+	case editFocusDesc:
+		var cmd tea.Cmd
+		m.editDescInput, cmd = m.editDescInput.Update(msg)
+		return m, cmd
+	}
+
+	return m, nil
+}
+
+func (m Model) editMoveFocus(delta int) (tea.Model, tea.Cmd) {
+	m.editFocused = (m.editFocused + delta + 2) % 2
+
+	m.editParentFilter.Blur()
+	m.editDescInput.Blur()
+
 	var cmd tea.Cmd
-	m.parentInput, cmd = m.parentInput.Update(msg)
-	if m.parentInput.Value() != prev {
-		m.buildParentCandidates()
+	switch m.editFocused {
+	case editFocusParent:
+		m.editPreselectParent()
+		cmd = m.editParentFilter.Focus()
+	case editFocusDesc:
+		cmd = m.editDescInput.Focus()
 	}
 	return m, cmd
 }
 
-func (m Model) updateSetDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, m.keys.Clear):
-		m.settingDesc = false
-		m.descInput.Blur()
-		m.descInput.Reset()
-		return m, nil
-
-	case key.Matches(msg, m.keys.Quit):
-		m.quitting = true
-		return m, tea.Quit
-
-	case key.Matches(msg, m.keys.Confirm):
-		desc := strings.TrimSpace(m.descInput.Value())
-		branch := m.targetDescBranch
-		return m, doSetDesc(branch, desc)
-	}
-
-	var cmd tea.Cmd
-	m.descInput, cmd = m.descInput.Update(msg)
-	return m, cmd
-}
-
-// buildParentCandidates filters local branch names (excluding targetBranch)
-// by the current parentInput value and resets the candidate cursor.
-func (m *Model) buildParentCandidates() {
-	q := strings.ToLower(m.parentInput.Value())
-	var candidates []string
-	for _, b := range m.branches {
-		if b.IsRemote || b.Name == m.targetBranch {
-			continue
+func (m Model) editHandleEnter() (tea.Model, tea.Cmd) {
+	switch m.editFocused {
+	case editFocusParent:
+		// Confirm highlighted picker item (if any visible)
+		if len(m.editPickerItems) > 0 {
+			m.editSelectedParent = m.editPickerItems[m.editParentCursor].branch.Name
+			m.editParentFilter.Reset()
+			m.editApplyFilter()
 		}
-		if q == "" || strings.Contains(strings.ToLower(b.Name), q) {
-			candidates = append(candidates, b.Name)
-		}
+		return m.editMoveFocus(1)
+
+	case editFocusDesc:
+		return m.editSave()
 	}
-	m.parentCandidates = candidates
-	m.parentCursor = 0
-	m.parentOffset = 0
+	return m, nil
 }
 
-func (m *Model) clampParentScroll() {
-	vis := maxParentCandidates
-	if m.parentCursor < m.parentOffset {
-		m.parentOffset = m.parentCursor
-	}
-	if m.parentCursor >= m.parentOffset+vis {
-		m.parentOffset = m.parentCursor - vis + 1
-	}
+func (m Model) editSave() (tea.Model, tea.Cmd) {
+	m.editSaving = true
+	return m, doSaveEdit(
+		m.editTargetBranch,
+		m.editSelectedParent,
+		strings.TrimSpace(m.editDescInput.Value()),
+	)
 }
 
-func (m *Model) applyFilter() {
-	q := strings.ToLower(m.filterInput.Value())
+// ── Edit picker helpers ────────────────────────────────────────────────────
+
+func (m *Model) editApplyFilter() {
+	q := strings.ToLower(m.editParentFilter.Value())
 	if q == "" {
-		// Restore full tree view
-		m.filtered = m.treeItems
+		m.editPickerItems = m.editAllItems
 	} else {
-		// Flat filter mode: strip tree connectors, show plain sorted matches
 		var out []renderItem
-		for _, b := range m.branches {
-			if strings.Contains(strings.ToLower(b.Name), q) {
-				out = append(out, renderItem{branch: b})
+		for _, item := range m.editAllItems {
+			if strings.Contains(strings.ToLower(item.branch.Name), q) {
+				out = append(out, renderItem{branch: item.branch})
 			}
 		}
-		m.filtered = out
+		m.editPickerItems = out
 	}
-	m.cursor = 0
-	m.offset = 0
-
-	// Recompute visible rows for new list length
-	vis := len(m.filtered)
-	if vis > maxVisible {
-		vis = maxVisible
-	}
-	if vis < 1 {
-		vis = 1
-	}
-	m.visibleRows = vis
+	m.editParentCursor = 0
+	m.editParentOffset = 0
 }
 
-func (m *Model) clampScroll() {
-	// Keep cursor visible within [offset, offset+visibleRows)
-	if m.cursor < m.offset {
-		m.offset = m.cursor
+func (m *Model) editPreselectParent() {
+	if m.editSelectedParent == "" {
+		return
 	}
-	if m.cursor >= m.offset+m.visibleRows {
-		m.offset = m.cursor - m.visibleRows + 1
+	for i, item := range m.editPickerItems {
+		if item.branch.Name == m.editSelectedParent {
+			m.editParentCursor = i
+			m.editClampScroll()
+			return
+		}
+	}
+}
+
+func (m *Model) editClampScroll() {
+	vis := maxEditPickerRows
+	if m.editParentCursor < m.editParentOffset {
+		m.editParentOffset = m.editParentCursor
+	}
+	if m.editParentCursor >= m.editParentOffset+vis {
+		m.editParentOffset = m.editParentCursor - vis + 1
 	}
 }
 
@@ -574,6 +567,10 @@ func (m *Model) clampScroll() {
 func (m Model) View() string {
 	if m.done || m.quitting {
 		return ""
+	}
+
+	if m.editing {
+		return m.viewEditForm()
 	}
 
 	var sb strings.Builder
@@ -607,6 +604,156 @@ func (m Model) View() string {
 	return sb.String()
 }
 
+// viewEditForm renders the checkout-style edit form as the full view.
+func (m Model) viewEditForm() string {
+	var sb strings.Builder
+
+	// Header
+	badge := ui.StyleCountBadge.Render("edit branch")
+	targetS := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(m.editTargetBranch)
+	sb.WriteString(ui.StyleHeader.Render("  ✦ Edit Branch") + "  " + targetS + "  " + badge + "\n")
+	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
+
+	sb.WriteString(m.editRenderParentField() + "\n")
+	sb.WriteString(m.editRenderDescField() + "\n")
+
+	// Picker panel — shown when parent field is focused
+	if m.editFocused == editFocusParent && !m.editSaving {
+		sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
+		for _, l := range m.editPickerLines() {
+			sb.WriteString(l + "\n")
+		}
+	}
+
+	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
+	sb.WriteString(m.editFooter())
+
+	return sb.String()
+}
+
+func (m Model) editRenderParentField() string {
+	focused := m.editFocused == editFocusParent && !m.editSaving
+	label := editFieldLabel("⎇ Parent:", focused)
+
+	if focused {
+		if m.editSelectedParent != "" {
+			selS := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).
+				Render(m.editSelectedParent)
+			filterS := lipgloss.NewStyle().
+				Width(editInputW - lipgloss.Width(m.editSelectedParent) - 2).
+				Render(m.editParentFilter.View())
+			return "  " + label + " " + selS + "  " + ui.StyleDim.Render("filter: ") + filterS
+		}
+		return "  " + label + " " + lipgloss.NewStyle().Width(editInputW).Render(m.editParentFilter.View())
+	}
+
+	if m.editSelectedParent != "" {
+		val := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).
+			Width(editInputW).Render(m.editSelectedParent)
+		return "  " + label + " " + val
+	}
+	return "  " + label + " " + lipgloss.NewStyle().Foreground(ui.ColorDim).Width(editInputW).Render("(none)")
+}
+
+func (m Model) editRenderDescField() string {
+	focused := m.editFocused == editFocusDesc && !m.editSaving
+	label := editFieldLabel("✎ Desc:", focused)
+	return "  " + label + " " + lipgloss.NewStyle().Width(editInputW).Render(m.editDescInput.View())
+}
+
+func editFieldLabel(text string, focused bool) string {
+	s := lipgloss.NewStyle().Width(editLabelW)
+	if focused {
+		return s.Bold(true).Foreground(ui.ColorKeyHint).Render(text)
+	}
+	return s.Foreground(ui.ColorDim).Render(text)
+}
+
+func (m Model) editPickerLines() []string {
+	var lines []string
+
+	if len(m.editPickerItems) == 0 {
+		lines = append(lines, ui.StyleDim.Render("  (no branches)"))
+		return lines
+	}
+
+	end := m.editParentOffset + maxEditPickerRows
+	if end > len(m.editPickerItems) {
+		end = len(m.editPickerItems)
+	}
+
+	const indent = 4
+	const nameMax = 28
+	const descSep = 2
+
+	for i := m.editParentOffset; i < end; i++ {
+		item := m.editPickerItems[i]
+		b := item.branch
+
+		prefixLen := len([]rune(item.treePrefix))
+		avail := m.width - indent - prefixLen
+		nameW := avail
+		if nameW > nameMax {
+			nameW = nameMax
+		}
+		if nameW < 4 {
+			nameW = 4
+		}
+		name := truncate(b.Name, nameW)
+
+		descW := m.width - indent - prefixLen - nameW - descSep
+		desc := ""
+		if b.Description != "" && descW > 4 {
+			desc = "  " + ui.StyleDesc.Italic(true).Render(truncate(b.Description, descW))
+		}
+
+		if i == m.editParentCursor {
+			row := lipgloss.NewStyle().
+				Background(ui.ColorCursorBg).
+				Foreground(ui.ColorCursorFg).
+				Bold(true).
+				Width(m.width - 2).
+				Render("  » " + item.treePrefix + name + desc)
+			lines = append(lines, row)
+		} else {
+			prefixS := ui.StyleTreeConnector.Render(item.treePrefix)
+			nameS := lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(name)
+			lines = append(lines, "    "+prefixS+nameS+desc)
+		}
+	}
+
+	if len(m.editPickerItems) > maxEditPickerRows {
+		shown := fmt.Sprintf("  %d–%d of %d", m.editParentOffset+1, end, len(m.editPickerItems))
+		lines = append(lines, ui.StyleDim.Render(shown))
+	}
+
+	return lines
+}
+
+func (m Model) editFooter() string {
+	dc := lipgloss.NewStyle().Foreground(ui.ColorHeader)
+
+	if m.editSaving {
+		return "  " + m.spinner.View() + " " +
+			lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render("saving…")
+	}
+
+	if m.editFocused == editFocusParent {
+		return "  " +
+			ui.StyleKeyHint.Render("↑/↓") + dc.Render(" navigate  ") +
+			ui.StyleKeyHint.Render("enter") + dc.Render(" select  ") +
+			ui.StyleKeyHint.Render("ctrl+d") + dc.Render(" clear  ") +
+			ui.StyleKeyHint.Render("tab") + dc.Render(" next field  ") +
+			ui.StyleKeyHint.Render("esc") + dc.Render(" cancel")
+	}
+
+	return "  " +
+		ui.StyleKeyHint.Render("tab") + dc.Render("/") +
+		ui.StyleKeyHint.Render("shift+tab") + dc.Render(" navigate  ") +
+		ui.StyleKeyHint.Render("enter") + dc.Render(" save  ") +
+		ui.StyleKeyHint.Render("esc") + dc.Render(" cancel")
+}
+
 // focusedName returns the full branch name under the cursor, or "" if none.
 func (m Model) focusedName() string {
 	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
@@ -616,24 +763,15 @@ func (m Model) focusedName() string {
 }
 
 // ── Footer info lines ──────────────────────────────────────────────────────
-//
-// footerInfoLine is a function that produces one contextual footer line.
-// Return "" to omit the line entirely. Reorder or remove entries in
-// footerInfoLines to change what appears below the primary hint/state row.
 
 type footerInfoLine func(m Model) string
 
-// footerInfoLines is the ordered list of contextual lines rendered below the
-// primary state row (key hints / filter prompt / error). Edit this slice to
-// add, remove, or reorder footer info items.
 var footerInfoLines = []footerInfoLine{
 	footerNamePin,
 	footerBranchDesc,
 	footerParentStatusDesc,
 }
 
-// footerNamePin shows the full branch name of the focused row, solving the
-// truncation problem in deep tree paths.
 func footerNamePin(m Model) string {
 	name := m.focusedName()
 	if name == "" {
@@ -644,7 +782,6 @@ func footerNamePin(m Model) string {
 	return label + value
 }
 
-// footerBranchDesc shows the pgit-desc of the focused branch, if set.
 func footerBranchDesc(m Model) string {
 	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
 		return ""
@@ -658,8 +795,6 @@ func footerBranchDesc(m Model) string {
 	return label + value
 }
 
-// footerParentStatusDesc shows a human-readable description of the focused
-// branch's relationship to its parent branch.
 func footerParentStatusDesc(m Model) string {
 	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
 		return ""
@@ -691,7 +826,6 @@ func footerParentStatusDesc(m Model) string {
 	}
 }
 
-// renderInfoLines collects all non-empty footer info lines into one string.
 func (m Model) renderInfoLines() string {
 	var lines []string
 	for _, fn := range footerInfoLines {
@@ -705,70 +839,10 @@ func (m Model) renderInfoLines() string {
 	return "\n" + strings.Join(lines, "\n")
 }
 
-// renderParentSuggestions renders the candidate list for set-parent mode.
-// Up to maxParentCandidates lines are shown; the selected row is highlighted.
-func (m Model) renderParentSuggestions() string {
-	var sb strings.Builder
-	header := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render("  ⎇ set parent of ") +
-		lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true).Render(m.targetBranch)
-	sb.WriteString(header + "\n")
-
-	if len(m.parentCandidates) == 0 {
-		sb.WriteString(ui.StyleDim.Render("    (no matches)"))
-		return sb.String()
-	}
-
-	end := m.parentOffset + maxParentCandidates
-	if end > len(m.parentCandidates) {
-		end = len(m.parentCandidates)
-	}
-	for i := m.parentOffset; i < end; i++ {
-		c := m.parentCandidates[i]
-		if i == m.parentCursor {
-			row := lipgloss.NewStyle().
-				Background(ui.ColorCursorBg).
-				Foreground(ui.ColorCursorFg).
-				Bold(true).
-				Width(m.width - 4).
-				Render("  › " + c)
-			sb.WriteString("  " + row + "\n")
-		} else {
-			sb.WriteString("    " + lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(c) + "\n")
-		}
-	}
-	return strings.TrimRight(sb.String(), "\n")
-}
-
 func (m Model) footer() string {
 	info := m.renderInfoLines()
 
 	switch {
-	case m.settingDesc:
-		header := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render("  "+m.spinner.View()+" set desc of ") +
-			lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true).Render(m.targetDescBranch)
-		prompt := ui.StyleKeyHint.Render("d") +
-			ui.StyleDim.Render(" desc: ") +
-			m.descInput.View()
-		dc := lipgloss.NewStyle().Foreground(ui.ColorHeader)
-		hint := "  " +
-			ui.StyleKeyHint.Render("enter") + dc.Render(" save  ") +
-			ui.StyleKeyHint.Render("esc") + dc.Render(" cancel")
-		return header + "\n  " + prompt + hint + info
-
-	case m.settingParent:
-		suggestions := m.renderParentSuggestions()
-		prompt := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render(m.spinner.View()) +
-			ui.StyleKeyHint.Render(" p") +
-			ui.StyleDim.Render(" parent: ") +
-			m.parentInput.View()
-		desc := lipgloss.NewStyle().Foreground(ui.ColorHeader)
-		hint := "  " +
-			ui.StyleKeyHint.Render("↑/↓") + desc.Render(" navigate  ") +
-			ui.StyleKeyHint.Render("enter") + desc.Render(" confirm  ") +
-			ui.StyleKeyHint.Render("ctrl+d") + desc.Render(" unset parent  ") +
-			ui.StyleKeyHint.Render("esc") + desc.Render(" cancel")
-		return suggestions + "\n  " + prompt + hint + info
-
 	case m.filtering:
 		prompt := ui.StyleKeyHint.Render("/") +
 			ui.StyleDim.Render(" filter: ") +
@@ -793,7 +867,6 @@ func (m Model) SwitchedTo() string { return m.switchedTo }
 
 // ── Row rendering ──────────────────────────────────────────────────────────
 
-// renderHeaders returns a dim column header row aligned to the data columns.
 func renderHeaders() string {
 	sep := strings.Repeat(" ", colPad)
 	nameH   := lipgloss.NewStyle().Width(colName).Render(ui.StyleDim.Render("Branch"))
@@ -803,24 +876,18 @@ func renderHeaders() string {
 	return "   " + sep + nameH + sep + statusH + sep + descH + sep + timeH
 }
 
-// parentStatusText returns the display text and its lipgloss style for the
-// parent-status column. Raw text is returned separately so callers can apply
-// a background style on the cursor row.
 func parentStatusText(b git.Branch) (text string, style lipgloss.Style) {
 	if b.Parent == "" || b.IsRemote {
 		return padRight("", colStatus), lipgloss.NewStyle()
 	}
 	switch {
 	case b.ParentAhead == 0:
-		// All commits merged into parent (or nothing committed yet).
 		return padRight("✓ merged", colStatus),
 			lipgloss.NewStyle().Foreground(ui.ColorParentMerged)
 	case b.ParentBehind == 0:
-		// Ahead of parent, parent hasn't moved — clean, just unmerged work.
 		return padRight(fmt.Sprintf("↑%d", b.ParentAhead), colStatus),
 			lipgloss.NewStyle().Foreground(ui.ColorParentAhead)
 	default:
-		// Diverged: ahead AND parent has new commits — warning orange.
 		text = fmt.Sprintf("↑%d ↓%d", b.ParentAhead, b.ParentBehind)
 		return padRight(text, colStatus),
 			lipgloss.NewStyle().Foreground(ui.ColorParentDiverged)
@@ -830,7 +897,6 @@ func parentStatusText(b git.Branch) (text string, style lipgloss.Style) {
 func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	b := item.branch
 
-	// Name column width shrinks by the visual width of the tree prefix (rune count).
 	prefixW := len([]rune(item.treePrefix))
 	nameW := colName - prefixW
 	if nameW < 8 {
@@ -845,23 +911,23 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 		markerChar = "»"
 	}
 
-	nameText   := padRight(truncate(b.Name, nameW), nameW)
+	nameText := padRight(truncate(b.Name, nameW), nameW)
 	statusText, statusStyle := parentStatusText(b)
-	descText   := padRight(truncate(b.Description, colDesc), colDesc)
-	timeText   := b.RelTime
+	descText := padRight(truncate(b.Description, colDesc), colDesc)
+	timeText := b.RelTime
 
 	sep := strings.Repeat(" ", colPad)
 
 	if isSelected {
 		bg := ui.ColorCursorBg
-		bgSep    := lipgloss.NewStyle().Background(bg).Render(sep)
-		markerS  := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorAccent).Render(markerChar)
-		prefixS  := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDim).Render(item.treePrefix)
-		nameS    := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(nameW).Render(nameText)
-		statusS  := statusStyle.Background(bg).Width(colStatus).Render(statusText)
-		descS    := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDesc).Italic(true).Width(colDesc).Render(descText)
-		timeS    := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorRelTime).Render(timeText)
-		leftPad  := lipgloss.NewStyle().Background(bg).Render("  ")
+		bgSep   := lipgloss.NewStyle().Background(bg).Render(sep)
+		markerS := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorAccent).Render(markerChar)
+		prefixS := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDim).Render(item.treePrefix)
+		nameS   := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(nameW).Render(nameText)
+		statusS := statusStyle.Background(bg).Width(colStatus).Render(statusText)
+		descS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDesc).Italic(true).Width(colDesc).Render(descText)
+		timeS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorRelTime).Render(timeText)
+		leftPad := lipgloss.NewStyle().Background(bg).Render("  ")
 		used := 2 + colMarker + colPad + colName + colPad + colStatus + colPad + colDesc + colPad + len([]rune(timeText))
 		trail := ""
 		if termWidth > used {
@@ -870,7 +936,6 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 		return leftPad + markerS + bgSep + prefixS + nameS + bgSep + statusS + bgSep + descS + bgSep + timeS + trail
 	}
 
-	// Normal row
 	prefixS := ui.StyleTreeConnector.Render(item.treePrefix)
 	var markerS, nameS string
 	if b.IsCurrent {
@@ -899,31 +964,35 @@ func doSwitch(name string) tea.Cmd {
 	}
 }
 
-func doSetParent(child, parent string) tea.Cmd {
+func doSaveEdit(branch, parent, desc string) tea.Cmd {
 	return func() tea.Msg {
-		var err error
-		if parent == "" || parent == "(none — clear parent)" {
-			err = git.UnsetParent(child)
-			return parentSetMsg{err: err, child: child, parent: ""}
-		}
-		err = git.SetParent(child, parent)
-		if err != nil {
-			return parentSetMsg{err: err, child: child, parent: parent}
-		}
-		ahead, behind := git.ParentAheadBehind(child, parent)
-		return parentSetMsg{child: child, parent: parent, ahead: ahead, behind: behind}
-	}
-}
-
-func doSetDesc(branch, desc string) tea.Cmd {
-	return func() tea.Msg {
-		var err error
-		if desc == "" {
-			err = git.UnsetDescription(branch)
+		// Set or clear parent
+		if parent == "" {
+			if err := git.UnsetParent(branch); err != nil {
+				return editSavedMsg{err: err, branch: branch}
+			}
 		} else {
-			err = git.SetDescription(branch, desc)
+			if err := git.SetParent(branch, parent); err != nil {
+				return editSavedMsg{err: err, branch: branch}
+			}
 		}
-		return descSetMsg{err: err, branch: branch, desc: desc}
+
+		// Set or clear description
+		if desc == "" {
+			if err := git.UnsetDescription(branch); err != nil {
+				return editSavedMsg{err: err, branch: branch}
+			}
+		} else {
+			if err := git.SetDescription(branch, desc); err != nil {
+				return editSavedMsg{err: err, branch: branch}
+			}
+		}
+
+		var ahead, behind int
+		if parent != "" {
+			ahead, behind = git.ParentAheadBehind(branch, parent)
+		}
+		return editSavedMsg{branch: branch, parent: parent, desc: desc, ahead: ahead, behind: behind}
 	}
 }
 
@@ -945,14 +1014,10 @@ func padRight(s string, w int) string {
 	return s + strings.Repeat(" ", w-len(r))
 }
 
-// ── Tree builder ───────────────────────────────────────────────────────────
+// ── Tree builders ──────────────────────────────────────────────────────────
 
 // buildRenderItems converts a flat branch list into a DFS-ordered []renderItem.
-// Each local branch's Parent field is used to build the hierarchy; branches
-// with no parent (or an unknown parent) become roots. Remote branches are
-// appended flat after the local tree with no connectors.
 func buildRenderItems(branches []git.Branch) []renderItem {
-	// Index local branch names for parent look-up
 	nameToIdx := make(map[string]int)
 	for i, b := range branches {
 		if !b.IsRemote {
@@ -960,7 +1025,6 @@ func buildRenderItems(branches []git.Branch) []renderItem {
 		}
 	}
 
-	// Build children map: "" = roots, branchName = children of that branch
 	children := make(map[string][]git.Branch)
 	for _, b := range branches {
 		if b.IsRemote {
@@ -977,7 +1041,6 @@ func buildRenderItems(branches []git.Branch) []renderItem {
 
 	var result []renderItem
 
-	// DFS from virtual root, building box-drawing connector strings
 	var dfs func(parentName string, isLastAtDepth []bool)
 	dfs = func(parentName string, isLastAtDepth []bool) {
 		kids := children[parentName]
@@ -985,7 +1048,6 @@ func buildRenderItems(branches []git.Branch) []renderItem {
 			isLast := i == len(kids)-1
 			depth := len(isLastAtDepth)
 
-			// Build raw (no ANSI) connector string
 			prefix := ""
 			for d := 0; d < depth; d++ {
 				if isLastAtDepth[d] {
@@ -1015,7 +1077,7 @@ func buildRenderItems(branches []git.Branch) []renderItem {
 
 	dfs("", []bool{})
 
-	// Append remote branches flat (no tree connectors)
+	// Append remote branches flat
 	for _, b := range branches {
 		if b.IsRemote {
 			result = append(result, renderItem{branch: b})
@@ -1023,4 +1085,99 @@ func buildRenderItems(branches []git.Branch) []renderItem {
 	}
 
 	return result
+}
+
+// buildEditPickerItems builds picker items for the edit form's parent picker.
+// Only local branches are included; the branch being edited is excluded.
+func buildEditPickerItems(branches []git.Branch, exclude string) []renderItem {
+	nameToIdx := make(map[string]int)
+	for i, b := range branches {
+		if !b.IsRemote && b.Name != exclude {
+			nameToIdx[b.Name] = i
+		}
+	}
+
+	children := make(map[string][]git.Branch)
+	for _, b := range branches {
+		if b.IsRemote || b.Name == exclude {
+			continue
+		}
+		if b.Parent != "" && b.Parent != exclude {
+			if _, ok := nameToIdx[b.Parent]; ok {
+				children[b.Parent] = append(children[b.Parent], b)
+				continue
+			}
+		}
+		children[""] = append(children[""], b)
+	}
+
+	var result []renderItem
+
+	var dfs func(parentName string, isLastAtDepth []bool)
+	dfs = func(parentName string, isLastAtDepth []bool) {
+		kids := children[parentName]
+		for i, b := range kids {
+			isLast := i == len(kids)-1
+			depth := len(isLastAtDepth)
+
+			prefix := ""
+			for d := 0; d < depth; d++ {
+				if isLastAtDepth[d] {
+					prefix += "   "
+				} else {
+					prefix += "│  "
+				}
+			}
+			if isLast {
+				prefix += "└─ "
+			} else {
+				prefix += "├─ "
+			}
+
+			result = append(result, renderItem{branch: b, treePrefix: prefix, depth: depth})
+
+			next := make([]bool, depth+1)
+			copy(next, isLastAtDepth)
+			next[depth] = isLast
+			dfs(b.Name, next)
+		}
+	}
+
+	dfs("", []bool{})
+	return result
+}
+
+func (m *Model) applyFilter() {
+	q := strings.ToLower(m.filterInput.Value())
+	if q == "" {
+		m.filtered = m.treeItems
+	} else {
+		var out []renderItem
+		for _, b := range m.branches {
+			if strings.Contains(strings.ToLower(b.Name), q) {
+				out = append(out, renderItem{branch: b})
+			}
+		}
+		m.filtered = out
+	}
+	m.cursor = 0
+	m.offset = 0
+
+	vis := len(m.filtered)
+	if vis > maxVisible {
+		vis = maxVisible
+	}
+	if vis < 1 {
+		vis = 1
+	}
+	m.visibleRows = vis
+}
+
+func (m *Model) clampScroll() {
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+m.visibleRows {
+		m.offset = m.cursor - m.visibleRows + 1
+	}
 }
