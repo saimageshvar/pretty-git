@@ -132,10 +132,12 @@ Filter bar X breakpoints: measure `"  " + checkbox0_rendered` width after render
 | 2 | column headers |
 | 3 … 3+vis-1 | branch rows |
 | 3+vis | divider |
-| 3+vis+1 … | footer lines |
+| 3+vis+1 | filter prompt (`filter: [input]`) |
+| 3+vis+2 | key hints |
+| 3+vis+3 | divider (only if info lines exist) |
+| 3+vis+4 … | info lines: branch name, desc, parent status |
 
-Footer lines vary by mode — in normal mode line 0 = help, line 1 = name pin, line 2 = desc,
-line 3 = parent status. Track which footer lines are rendered to map them.
+No filter mode — filter is always-on. Footer layout is always the same structure.
 
 ### pgit checkout
 

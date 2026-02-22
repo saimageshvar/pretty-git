@@ -1,20 +1,28 @@
-# pgit checkout -b — Implementation Summary
+# pgit checkout — Implementation Summary
 
 ## What it does
-Inline TUI form for creating a branch with optional parent + description.
-If all three are supplied via flags, no TUI opens — branch is created directly.
+Three-mode command that bridges native `git checkout` UX with pgit's TUI:
 
-## Command
+| Invocation                    | Behaviour                                              |
+|-------------------------------|--------------------------------------------------------|
+| `pgit checkout`               | Branch switcher UI (identical to `pgit branch`)        |
+| `pgit checkout <name>`        | Switch directly if branch exists; open create form if not |
+| `pgit checkout -b [name] ...` | Inline TUI form to create a new branch                 |
+
+If all three fields (name, parent, desc) are supplied via flags, no TUI opens.
+
+## Command routing (checkout.go)
 ```
-pgit checkout -b [name] [-p parent] [-d description]
+runCheckout(args)
+  ├── len(args)==0              → runBranch()
+  ├── args[0] has no "-" prefix → BranchExists? SwitchBranch : runCheckoutCreate(["-b", name])
+  └── args[0]=="-b"             → runCheckoutCreate(args)
 ```
-- All args optional; TUI opens for any missing field
-- All-provided path: creates branch, sets parent/desc, prints summary to stdout
 
 ## Key files
-- `cmd/pretty-git/checkout.go` — flag parsing, TUI runner, printCreated
-- `internal/ui/checkout/model.go` — Bubble Tea model
-- `internal/git/git.go` — `CreateBranch(name)` added
+- `cmd/pretty-git/checkout.go` — routing (`runCheckout`), create form runner (`runCheckoutCreate`), `printCreated`
+- `internal/ui/checkout/model.go` — Bubble Tea create form model
+- `internal/git/git.go` — `CreateBranch`, `SwitchBranch`, `BranchExists` (added)
 
 ## TUI form — 3 fields, Tab/Shift+Tab to navigate
 | Field    | Widget      | Notes                                  |

@@ -2,7 +2,7 @@
 
 ## What it does
 Interactive inline branch switcher (fzf-style, no alt screen).
-Arrow navigation, Enter to switch, `/` to filter, `q` to quit.
+Arrow navigation, Enter to switch. Filter is **always-on** — type any character to filter instantly.
 
 ## Key files
 - `cmd/pretty-git/branch.go` — runner
@@ -23,13 +23,25 @@ using box-drawing characters (`├─`, `└─`, `│`).
   Box-drawing characters are Unicode-ambiguous and may render as 2 columns;
   rune count underestimates, causing columns to drift right per depth level.
 
+## Keybindings (normal view)
+| Key      | Action                                       |
+|----------|----------------------------------------------|
+| `↑/↓`   | navigate                                     |
+| `enter`  | switch branch                                |
+| `ctrl+e` | open edit form                               |
+| `esc`    | clear filter (if active), else quit          |
+| `ctrl+c` | force quit                                   |
+| any char | types into filter input immediately          |
+
+No `q`, `e`, `j`, `k` single-letter shortcuts — they conflict with typing branch names.
+
 ## Column layout
 ```
 "  " + marker(1) + sep(2) + prefix + name(32) + sep(2) + status(12) + sep(2) + time
 ```
 - Hash and subject columns removed; replaced by `vs parent` status column
 - Dim column header row rendered above branch rows: Branch · vs parent · Last commit
-- Filter mode: tree stripped, flat matches with no prefix
+- When filtering: tree stripped, flat matches with no prefix
 
 ## Parent status column
 `Branch.ParentAhead/ParentBehind` computed concurrently (one goroutine per branch) via
@@ -50,9 +62,20 @@ Press `p` on any local branch to open the parent picker:
 Key names (`↑/↓`, `enter`, `ctrl+d`, `esc`) → `StyleKeyHint` (blue).
 Descriptions after each key → `ColorHeader` (`#EEEEEE` dark). Never use `ColorDim` or `ColorSubject` for readable text.
 
-## Footer
-`footerInfoLines []footerInfoLine` — ordered slice of info line functions, easy to reorder/extend.
-Current items: `footerNamePin` (full branch name), `footerParentStatusDesc` (plain-English parent status).
+## Footer layout
+Always-visible filter prompt + key hints, then an optional divider + info lines:
+```
+────────────────────────────────────────
+  filter: [input]
+  ↑ up · ↓ down · enter switch · ctrl+e edit · esc clear/quit
+────────────────────────────────────────   ← only shown when info lines exist
+  branch  feature/foo
+  desc    some description
+  ↑3 ahead of main · ready to merge
+```
+- Filter input is always focused; no mode switch needed
+- `renderInfoLines()` prepends the second divider only when at least one info line is non-empty
+- `footerInfoLines []footerInfoLine` — ordered slice of info line functions: `footerNamePin`, `footerBranchDesc`, `footerParentStatusDesc`
 
 ## Timestamps
 `abbreviateRelTime()` in git.go: "30 minutes ago" → "30m", "2 hours ago" → "2h", "11 months ago" → "11mo", etc.
