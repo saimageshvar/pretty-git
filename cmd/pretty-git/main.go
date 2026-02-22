@@ -8,7 +8,11 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: pgit <command>")
-		fmt.Fprintln(os.Stderr, "commands: branch, checkout, log")
+		fmt.Fprintln(os.Stderr, "  branch              browse & switch branches")
+		fmt.Fprintln(os.Stderr, "  checkout            browse & switch branches")
+		fmt.Fprintln(os.Stderr, "  checkout <name>     switch to branch (create if missing)")
+		fmt.Fprintln(os.Stderr, "  checkout -b [name]  create new branch")
+		fmt.Fprintln(os.Stderr, "  log                 browse commit log")
 		os.Exit(1)
 	}
 

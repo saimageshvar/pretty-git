@@ -13,13 +13,42 @@ import (
 	checkoutui "github.com/sai/pretty-git/internal/ui/checkout"
 )
 
-// runCheckout handles `pgit checkout -b [name] [-p parent] [-d desc] [--layout=below|right]`.
+// runCheckout handles:
+//   pgit checkout            → branch switcher UI (same as pgit branch)
+//   pgit checkout <name>     → switch directly if exists; open create form if not
+//   pgit checkout -b [name]  → open create-branch form
 func runCheckout(args []string) {
-	// Only support `-b` sub-command for now.
-	if len(args) == 0 || args[0] != "-b" {
-		fmt.Fprintln(os.Stderr, "usage: pgit checkout -b [branch-name] [-p parent] [-d description]")
+	// ── No args: open branch switcher ──────────────────────────────────────
+	if len(args) == 0 {
+		runBranch()
+		return
+	}
+
+	// ── Branch name (no dash prefix): switch or create ─────────────────────
+	if !strings.HasPrefix(args[0], "-") {
+		name := args[0]
+		if git.BranchExists(name) {
+			if err := git.SwitchBranch(name); err != nil {
+				fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("✓ Switched to '%s'\n", name)
+			return
+		}
+		// Branch doesn't exist — open create form with name pre-filled
+		runCheckoutCreate([]string{"-b", name})
+		return
+	}
+
+	if args[0] != "-b" {
+		fmt.Fprintln(os.Stderr, "usage: pgit checkout [-b [branch-name] [-p parent] [-d description]]")
 		os.Exit(1)
 	}
+	runCheckoutCreate(args)
+}
+
+// runCheckoutCreate handles `pgit checkout -b [name] [-p parent] [-d desc]`.
+func runCheckoutCreate(args []string) {
 
 	fs := flag.NewFlagSet("checkout -b", flag.ExitOnError)
 	parentFlag := fs.String("p", "", "parent branch")

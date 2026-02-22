@@ -383,6 +383,15 @@ func UnsetParent(child string) error {
 	return nil
 }
 
+// BranchExists returns true if a local branch with the given name exists.
+func BranchExists(name string) bool {
+	out, err := run("git", "branch", "--list", name)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != ""
+}
+
 // CurrentBranch returns the name of the currently checked-out branch,
 // or "" if HEAD is detached or the command fails.
 func CurrentBranch() string {

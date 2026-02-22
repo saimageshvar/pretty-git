@@ -797,12 +797,13 @@ func (m Model) renderInfoLines() string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return "\n" + strings.Join(lines, "\n")
+	divider := "\n" + ui.StyleDivider.Render(strings.Repeat("─", m.width))
+	return divider + "\n" + strings.Join(lines, "\n")
 }
 
 func (m Model) footer() string {
 	info := m.renderInfoLines()
-	filterPrompt := ui.StyleDim.Render("filter: ") + m.filterInput.View()
+	filterPrompt := "  " + ui.StyleDim.Render("filter: ") + m.filterInput.View()
 	hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
 
 	switch {
@@ -810,10 +811,10 @@ func (m Model) footer() string {
 		return lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render("  " + m.spinner.View() + " switching branch…")
 
 	case m.err != "":
-		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n  " + filterPrompt + hints + info
+		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + filterPrompt + "\n" + hints + info
 
 	default:
-		return "  " + filterPrompt + hints + info
+		return filterPrompt + "\n" + hints + info
 	}
 }
 
