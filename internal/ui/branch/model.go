@@ -157,10 +157,20 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Bold(true).Foreground(ui.ColorAccent)
 
+	// Start with the cursor on the current branch.
+	initialCursor := 0
+	for i, item := range treeItems {
+		if item.branch.IsCurrent {
+			initialCursor = i
+			break
+		}
+	}
+
 	return Model{
 		branches:         branches,
 		treeItems:        treeItems,
 		filtered:         treeItems,
+		cursor:           initialCursor,
 		width:            termWidth,
 		visibleRows:      vis,
 		repoName:         repoName,
@@ -233,7 +243,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.treeItems = buildRenderItems(m.branches)
 		m.filtered = m.treeItems
+		savedName := m.editTargetBranch
 		m.applyFilter()
+		m.restoreCursor(savedName)
 		m.closeEditForm()
 		return m, nil
 
@@ -419,7 +431,9 @@ func (m Model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := msg.String()
 	switch k {
 	case "ctrl+c", "esc":
+		savedName := m.editTargetBranch
 		m.closeEditForm()
+		m.restoreCursor(savedName)
 		return m, nil
 
 	case "tab":
@@ -1179,5 +1193,20 @@ func (m *Model) clampScroll() {
 	}
 	if m.cursor >= m.offset+m.visibleRows {
 		m.offset = m.cursor - m.visibleRows + 1
+	}
+}
+
+// restoreCursor moves the cursor to the branch with the given name in filtered,
+// falling back to 0 if not found.
+func (m *Model) restoreCursor(name string) {
+	if name == "" {
+		return
+	}
+	for i, item := range m.filtered {
+		if item.branch.Name == name {
+			m.cursor = i
+			m.clampScroll()
+			return
+		}
 	}
 }
