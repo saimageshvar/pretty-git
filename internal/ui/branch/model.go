@@ -49,7 +49,6 @@ type Model struct {
 	filtered    []renderItem // active list (tree mode or flat filter mode)
 	cursor      int
 	offset      int
-	filtering   bool
 	err         string
 	switching   bool
 	done        bool
@@ -127,6 +126,7 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
 	ti.Placeholder = "type to filter…"
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(ui.ColorAccent)
+	_ = ti.Focus()
 
 	// ── edit-form textinputs (initialised empty; populated on open) ────────
 	epf := textinput.New()
@@ -185,7 +185,9 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 	}
 }
 
-func (m Model) Init() tea.Cmd { return m.spinner.Tick }
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, m.filterInput.Focus())
+}
 
 // ── Update ─────────────────────────────────────────────────────────────────
 
@@ -229,7 +231,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err.Error()
 			m.closeEditForm()
-			return m, nil
+			return m, m.filterInput.Focus()
 		}
 		// Update in-memory branch data so the view reflects changes immediately.
 		for i := range m.branches {
@@ -247,36 +249,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		m.restoreCursor(savedName)
 		m.closeEditForm()
-		return m, nil
+		return m, m.filterInput.Focus()
 
 	case tea.KeyMsg:
 		if m.editing {
 			return m.updateEdit(msg)
 		}
-		if m.filtering {
-			return m.updateFilter(msg)
-		}
-		return m.updateNormal(msg)
+		return m.updateKeys(msg)
 	}
 	return m, nil
 }
 
-func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
 			m.clampScroll()
 		}
+		return m, nil
+
 	case key.Matches(msg, m.keys.Down):
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
 			m.clampScroll()
 		}
-	case key.Matches(msg, m.keys.Filter):
-		m.filtering = true
-		m.err = ""
-		return m, m.filterInput.Focus()
+		return m, nil
 
 	case key.Matches(msg, m.keys.Edit):
 		if len(m.filtered) == 0 {
@@ -287,6 +285,21 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.openEditForm(b)
+
+	case key.Matches(msg, m.keys.EscBack):
+		// esc: clear filter if active, otherwise quit
+		if m.filterInput.Value() != "" {
+			var savedName string
+			if len(m.filtered) > 0 && m.cursor < len(m.filtered) {
+				savedName = m.filtered[m.cursor].branch.Name
+			}
+			m.filterInput.Reset()
+			m.applyFilter()
+			m.restoreCursor(savedName)
+			return m, nil
+		}
+		m.quitting = true
+		return m, tea.Quit
 
 	case key.Matches(msg, m.keys.Quit):
 		m.quitting = true
@@ -311,75 +324,8 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, doSwitch(name)
 	}
-	return m, nil
-}
 
-func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, m.keys.Clear):
-		m.filtering = false
-		m.filterInput.Blur()
-		// Save cursor position by branch name before clearing
-		var savedName string
-		if len(m.filtered) > 0 && m.cursor < len(m.filtered) {
-			savedName = m.filtered[m.cursor].branch.Name
-		}
-		m.filterInput.Reset()
-		m.applyFilter()
-		// Restore cursor to same branch in tree view
-		if savedName != "" {
-			for i, item := range m.filtered {
-				if item.branch.Name == savedName {
-					m.cursor = i
-					m.clampScroll()
-					break
-				}
-			}
-		}
-		return m, nil
-
-	case key.Matches(msg, m.keys.Quit):
-		m.quitting = true
-		return m, tea.Quit
-
-	case key.Matches(msg, m.keys.Confirm):
-		if len(m.filtered) > 0 {
-			b := m.filtered[m.cursor].branch
-			if !b.IsCurrent {
-				m.filtering = false
-				m.filterInput.Blur()
-				m.switching = true
-				m.err = ""
-				name := b.Name
-				if b.IsRemote {
-					parts := strings.SplitN(name, "/", 3)
-					if len(parts) == 3 {
-						name = parts[2]
-					}
-				}
-				return m, doSwitch(name)
-			}
-		}
-		m.filtering = false
-		m.filterInput.Blur()
-		return m, nil
-
-	case key.Matches(msg, m.keys.Up):
-		if m.cursor > 0 {
-			m.cursor--
-			m.clampScroll()
-		}
-		return m, nil
-
-	case key.Matches(msg, m.keys.Down):
-		if m.cursor < len(m.filtered)-1 {
-			m.cursor++
-			m.clampScroll()
-		}
-		return m, nil
-	}
-
-	// All other keys go to the textinput
+	// All other keys (letters, numbers, symbols, backspace, etc.) go to the filter input.
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(msg)
 	m.applyFilter()
@@ -396,6 +342,7 @@ func (m Model) openEditForm(b git.Branch) (tea.Model, tea.Cmd) {
 	m.editSaving = false
 	m.err = ""
 
+	m.filterInput.Blur()
 	m.editParentFilter.Reset()
 	m.editDescInput.SetValue(b.Description)
 
@@ -434,7 +381,7 @@ func (m Model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		savedName := m.editTargetBranch
 		m.closeEditForm()
 		m.restoreCursor(savedName)
-		return m, nil
+		return m, m.filterInput.Focus()
 
 	case "tab":
 		return m.editMoveFocus(1)
@@ -855,24 +802,18 @@ func (m Model) renderInfoLines() string {
 
 func (m Model) footer() string {
 	info := m.renderInfoLines()
+	filterPrompt := ui.StyleDim.Render("filter: ") + m.filterInput.View()
+	hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
 
 	switch {
-	case m.filtering:
-		prompt := ui.StyleKeyHint.Render("/") +
-			ui.StyleDim.Render(" filter: ") +
-			m.filterInput.View()
-		hint := ui.StyleDim.Render("  " + m.help.ShortHelpView(m.keys.filterShortHelp()))
-		return "  " + prompt + hint + info
-
 	case m.switching:
 		return lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render("  " + m.spinner.View() + " switching branch…")
 
 	case m.err != "":
-		hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
-		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + hints + info
+		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n  " + filterPrompt + hints + info
 
 	default:
-		return "  " + m.help.ShortHelpView(m.keys.ShortHelp()) + info
+		return "  " + filterPrompt + hints + info
 	}
 }
 
