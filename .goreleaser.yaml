@@ -1,0 +1,68 @@
+version: 2
+
+project_name: pretty-git
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: pgit
+    main: ./cmd/pretty-git
+    binary: pgit
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: pgit-archive
+    ids: [pgit]
+    format: tar.gz
+    name_template: "pgit_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - none*
+
+nfpms:
+  - id: pgit-deb
+    package_name: pgit
+    vendor: sai
+    homepage: https://github.com/sai/pretty-git
+    maintainer: sai
+    description: Prettifies git command output with aesthetic, information-dense TUI views.
+    license: MIT
+    formats:
+      - deb
+    bindir: /usr/local/bin
+    contents:
+      - dst: /usr/local/bin/pretty-git
+        type: symlink
+        src: /usr/local/bin/pgit
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: saimageshvar
+    name: pretty-git
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"
