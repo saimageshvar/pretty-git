@@ -34,10 +34,10 @@ esac
 
 if command -v curl &>/dev/null; then
   download() { curl -sSfL "$1"; }
-  download_to() { curl -sSfL -o "$2" "$1"; }
+  download_to() { curl -sSfL -o "$1" "$2"; }
 elif command -v wget &>/dev/null; then
   download() { wget -qO- "$1"; }
-  download_to() { wget -qO "$2" "$1"; }
+  download_to() { wget -qO "$1" "$2"; }
 else
   err "curl or wget is required. Install one with: sudo apt install curl"
 fi
