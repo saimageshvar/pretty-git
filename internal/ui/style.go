@@ -42,6 +42,9 @@ var (
 	// Errors and conflict warnings
 	ColorError = lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#FF6B6B"}
 
+	// Warning — amber, used for drop confirmation and destructive actions
+	ColorWarning = lipgloss.AdaptiveColor{Light: "#D97706", Dark: "#F59E0B"}
+
 	// Header / body text at full brightness
 	ColorHeader = lipgloss.AdaptiveColor{Light: "#111827", Dark: "#F1F5F9"}
 
@@ -85,6 +88,10 @@ var (
 	StyleError = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorError)
+
+	StyleWarning = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorWarning)
 
 	// "  Branches" title — bold, full brightness
 	StyleHeader = lipgloss.NewStyle().

@@ -560,3 +560,330 @@ func GetCommitDetail(hash string) (CommitDetail, error) {
 	}
 	return d, nil
 }
+
+
+// ── Stash ──────────────────────────────────────────────────────────────────
+
+// FileStatus represents a file's git status and path.
+type FileStatus struct {
+	Code string // X or XY code from `git status --porcelain`
+	Path string
+}
+
+// StatusDisplay returns a single letter for display (M, A, D, ?, R, …).
+func (f FileStatus) StatusDisplay() string {
+	if len(f.Code) == 0 {
+		return "?"
+	}
+	// Prioritise the index status (first char), fall back to worktree (second char).
+	idx := string(f.Code[0])
+	if idx != " " && idx != "?" {
+		return idx
+	}
+	if len(f.Code) > 1 {
+		wt := string(f.Code[1])
+		if wt != " " {
+			return wt
+		}
+	}
+	return "?"
+}
+
+// IsUntracked returns true if the file is untracked (?? in git status).
+func (f FileStatus) IsUntracked() bool {
+	return f.Code == "??"
+}
+
+// StashEntry holds summary metadata for one stash ref.
+type StashEntry struct {
+	Index   int
+	Ref     string // "stash@{N}"
+	Message string
+	Branch  string
+	RelTime string
+}
+
+// StashDetail holds extended info for one stash.
+type StashDetail struct {
+	StashEntry
+	FilesChanged int
+	Insertions   int
+	Deletions    int
+	Files        []FileStatus // files changed in the stash
+}
+
+// ListModifiedFiles returns the current working-tree status (staged + unstaged + untracked).
+func ListModifiedFiles() ([]FileStatus, error) {
+	out, err := run("git", "status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var files []FileStatus
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		code := line[:2]
+		path := strings.TrimSpace(line[3:])
+		// Handle renames: "R old -> new" — use the new path
+		if strings.Contains(path, " -> ") {
+			parts := strings.SplitN(path, " -> ", 2)
+			path = parts[1]
+		}
+		files = append(files, FileStatus{Code: code, Path: path})
+	}
+	return files, nil
+}
+
+// CountStagedFiles returns the number of staged (index) changes.
+func CountStagedFiles(files []FileStatus) int {
+	n := 0
+	for _, f := range files {
+		if len(f.Code) > 0 && f.Code[0] != ' ' && f.Code[0] != '?' {
+			n++
+		}
+	}
+	return n
+}
+
+// CountUnstagedFiles returns the number of unstaged (worktree) changes (excludes untracked).
+func CountUnstagedFiles(files []FileStatus) int {
+	n := 0
+	for _, f := range files {
+		if len(f.Code) > 1 && f.Code[1] != ' ' && f.Code != "??" {
+			n++
+		}
+	}
+	return n
+}
+
+// ListStashes returns all stash entries, most recent first.
+func ListStashes() ([]StashEntry, error) {
+	out, err := run("git", "stash", "list", "--format=%gd|%gs|%cr")
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimRight(out, "\n")
+	if out == "" {
+		return nil, nil
+	}
+
+	var entries []StashEntry
+	for i, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		ref := strings.TrimSpace(parts[0])
+		msg := strings.TrimSpace(parts[1])
+		relTime := strings.TrimSpace(parts[2])
+
+		// Extract branch from message: "On <branch>: <msg>" or "WIP on <branch>: <msg>"
+		branch := ""
+		displayMsg := msg
+		if after, ok := strings.CutPrefix(msg, "WIP on "); ok {
+			if colonIdx := strings.Index(after, ": "); colonIdx >= 0 {
+				branch = after[:colonIdx]
+				displayMsg = after[colonIdx+2:]
+			}
+		} else if after, ok := strings.CutPrefix(msg, "On "); ok {
+			if colonIdx := strings.Index(after, ": "); colonIdx >= 0 {
+				branch = after[:colonIdx]
+				displayMsg = after[colonIdx+2:]
+			}
+		}
+
+		entries = append(entries, StashEntry{
+			Index:   i,
+			Ref:     ref,
+			Message: displayMsg,
+			Branch:  branch,
+			RelTime: relTime,
+		})
+	}
+	return entries, nil
+}
+
+// GetStashDetail fetches extended info for a single stash entry.
+func GetStashDetail(ref string) (StashDetail, error) {
+	// Get list of changed files with status
+	out, err := run("git", "stash", "show", "--name-status", ref)
+	if err != nil {
+		return StashDetail{}, err
+	}
+
+	var files []FileStatus
+	var filesChanged, insertions, deletions int
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		code := fields[0]
+		path := fields[1]
+		// Map single-letter status to our 2-char code (staged perspective)
+		var fCode string
+		switch code {
+		case "M":
+			fCode = "M "
+		case "A":
+			fCode = "A "
+		case "D":
+			fCode = "D "
+		default:
+			fCode = code + " "
+		}
+		files = append(files, FileStatus{Code: fCode, Path: path})
+		filesChanged++
+	}
+
+	// Get diff stats
+	stat, err := run("git", "stash", "show", "--stat", ref)
+	if err == nil {
+		lines := strings.Split(strings.TrimRight(stat, "\n"), "\n")
+		if len(lines) > 0 {
+			summary := lines[len(lines)-1]
+			parts := strings.Fields(summary)
+			for pi, p := range parts {
+				switch {
+				case strings.HasPrefix(p, "insertion") && pi > 0:
+					fmt.Sscanf(parts[pi-1], "%d", &insertions)
+				case strings.HasPrefix(p, "deletion") && pi > 0:
+					fmt.Sscanf(parts[pi-1], "%d", &deletions)
+				}
+			}
+		}
+	}
+
+	return StashDetail{
+		FilesChanged: filesChanged,
+		Insertions:   insertions,
+		Deletions:    deletions,
+		Files:        files,
+	}, nil
+}
+
+// StashPush creates a stash with the given message and options.
+// stashType: "staged", "unstaged", "all", "custom"
+// customFiles: used when stashType == "custom"
+func StashPush(msg, stashType string, customFiles []string) error {
+	var args []string
+	switch stashType {
+	case "staged":
+		args = []string{"stash", "push", "--staged", "-m", msg}
+	case "unstaged":
+		// Stash only unstaged changes by listing their files explicitly
+		files, err := ListModifiedFiles()
+		if err != nil {
+			return err
+		}
+		var unstaged []string
+		for _, f := range files {
+			if len(f.Code) > 1 && f.Code[1] != ' ' && f.Code != "??" {
+				unstaged = append(unstaged, f.Path)
+			}
+		}
+		if len(unstaged) == 0 {
+			return fmt.Errorf("no unstaged files to stash")
+		}
+		args = append([]string{"stash", "push", "-m", msg, "--"}, unstaged...)
+	case "all":
+		args = []string{"stash", "push", "--include-untracked", "-m", msg}
+	case "custom":
+		// Check if any selected file is untracked
+		status, _ := ListModifiedFiles()
+		untrackedSet := make(map[string]bool)
+		for _, f := range status {
+			if f.IsUntracked() {
+				untrackedSet[f.Path] = true
+			}
+		}
+		hasUntracked := false
+		for _, path := range customFiles {
+			if untrackedSet[path] {
+				hasUntracked = true
+				break
+			}
+		}
+		if hasUntracked {
+			args = append([]string{"stash", "push", "--include-untracked", "-m", msg, "--"}, customFiles...)
+		} else {
+			args = append([]string{"stash", "push", "-m", msg, "--"}, customFiles...)
+		}
+	default:
+		args = []string{"stash", "push", "--include-untracked", "-m", msg}
+	}
+	cmd := exec.Command("git", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// StashApply applies a stash without removing it.
+func StashApply(ref string) error {
+	cmd := exec.Command("git", "stash", "apply", ref)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// StashPop applies a stash and removes it if successful.
+func StashPop(ref string) error {
+	cmd := exec.Command("git", "stash", "pop", ref)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// StashDrop removes a stash entry.
+func StashDrop(ref string) error {
+	cmd := exec.Command("git", "stash", "drop", ref)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// LastCommitShortHash returns the 7-char abbreviated hash of HEAD.
+func LastCommitShortHash() string {
+	out, err := run("git", "log", "-1", "--format=%h")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// LastCommitOneLiner returns "<hash> <subject>" for HEAD.
+func LastCommitOneLiner() string {
+	out, err := run("git", "log", "-1", "--format=%h %s")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
