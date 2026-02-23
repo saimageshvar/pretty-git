@@ -17,12 +17,13 @@ import (
 // ── Column widths ──────────────────────────────────────────────────────────
 
 const (
-	colMarker  = 1
-	colName    = 32
-	colStatus  = 12 // "✓ merged", "↑99 ↓99", etc.
-	colDesc    = 25 // branch description (truncated)
-	colPad     = 2
-	maxVisible = 15 // max rows shown at once (inline / fzf-style)
+	colMarker   = 1
+	colNameMin  = 20 // minimum name column width
+	colNameMax  = 60 // maximum name column width
+	colStatus   = 12 // "✓ merged", "↑99 ↓99", etc.
+	colDesc     = 25 // branch description (truncated)
+	colPad      = 2
+	maxVisible  = 15 // max rows shown at once (inline / fzf-style)
 
 	// edit form
 	editFocusParent   = 0
@@ -543,7 +544,7 @@ func (m Model) View() string {
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
 
 	// Column headers
-	sb.WriteString(renderHeaders() + "\n")
+	sb.WriteString(renderHeaders(m.width) + "\n")
 
 	// Branch rows
 	end := m.offset + m.visibleRows
@@ -823,9 +824,24 @@ func (m Model) SwitchedTo() string { return m.switchedTo }
 
 // ── Row rendering ──────────────────────────────────────────────────────────
 
-func renderHeaders() string {
+// nameColWidth returns the total width of the name column (including tree prefix)
+// based on terminal width, clamped between colNameMin and colNameMax.
+func nameColWidth(termWidth int) int {
+	// fixed overhead: indent(2) + marker(1) + 4×pad + status + desc + reltime(~14)
+	const fixedOverhead = 2 + colMarker + 4*colPad + colStatus + colDesc + 14
+	w := termWidth - fixedOverhead
+	if w < colNameMin {
+		w = colNameMin
+	}
+	if w > colNameMax {
+		w = colNameMax
+	}
+	return w
+}
+
+func renderHeaders(termWidth int) string {
 	sep := strings.Repeat(" ", colPad)
-	nameH   := lipgloss.NewStyle().Width(colName).Render(ui.StyleDim.Render("Branch"))
+	nameH   := lipgloss.NewStyle().Width(nameColWidth(termWidth)).Render(ui.StyleDim.Render("Branch"))
 	statusH := lipgloss.NewStyle().Width(colStatus).Render(ui.StyleDim.Render("vs parent"))
 	descH   := lipgloss.NewStyle().Width(colDesc).Render(ui.StyleDim.Render("Description"))
 	timeH   := ui.StyleDim.Render("Last commit")
@@ -854,7 +870,7 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	b := item.branch
 
 	prefixW := len([]rune(item.treePrefix))
-	nameW := colName - prefixW
+	nameW := nameColWidth(termWidth) - prefixW
 	if nameW < 8 {
 		nameW = 8
 	}
@@ -884,7 +900,7 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 		descS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDesc).Italic(true).Width(colDesc).Render(descText)
 		timeS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorRelTime).Render(timeText)
 		leftPad := lipgloss.NewStyle().Background(bg).Render("  ")
-		used := 2 + colMarker + colPad + colName + colPad + colStatus + colPad + colDesc + colPad + len([]rune(timeText))
+		used := 2 + colMarker + colPad + nameColWidth(termWidth) + colPad + colStatus + colPad + colDesc + colPad + len([]rune(timeText))
 		trail := ""
 		if termWidth > used {
 			trail = lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", termWidth-used))
