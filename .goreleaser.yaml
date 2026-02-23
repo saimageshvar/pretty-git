@@ -44,6 +44,9 @@ nfpms:
     contents:
       - src: ./pgit
         dst: /usr/local/bin/pgit
+      - dst: /usr/local/bin/pretty-git
+        type: symlink
+        src: /usr/local/bin/pgit
 
 checksum:
   name_template: "checksums.txt"
@@ -61,7 +64,7 @@ changelog:
 
 release:
   github:
-    owner: sai
+    owner: saimageshvar
     name: pretty-git
   draft: false
   prerelease: auto

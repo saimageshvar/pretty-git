@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # pretty-git installer
-# Usage: curl -sSL https://raw.githubusercontent.com/sai/pretty-git/main/install.sh | sudo bash
+# Usage: curl -sSL https://raw.githubusercontent.com/saimageshvar/pretty-git/main/install.sh | sudo bash
 
-REPO="sai/pretty-git"
+REPO="saimageshvar/pretty-git"
 BINARY="pgit"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
@@ -66,9 +66,14 @@ tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 install -m 755 "$TMP/$BINARY" "$INSTALL_DIR/$BINARY"
 
 ok "$BINARY $VERSION installed to $INSTALL_DIR/$BINARY"
+
+# symlink pretty-git → pgit
+ln -sf "$INSTALL_DIR/$BINARY" "$INSTALL_DIR/pretty-git"
+ok "Symlinked pretty-git → pgit"
+
 echo ""
-echo "  Try it:  pgit log"
-echo "           pgit branch"
-echo "           pgit checkout"
+echo "  Try it:  pgit log           (or: pretty-git log)"
+echo "           pgit branch        (or: pretty-git branch)"
+echo "           pgit checkout      (or: pretty-git checkout)"
 echo ""
 echo "  To update later, re-run this script."
