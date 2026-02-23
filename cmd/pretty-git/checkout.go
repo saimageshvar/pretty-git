@@ -97,7 +97,7 @@ func runCheckoutCreate(args []string) {
 	}
 
 	// ── At least one field missing: open TUI form ───────────────────────────
-	branches, err := git.ListBranches()
+	branches, err := git.ListLocalBranches()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
 		os.Exit(1)

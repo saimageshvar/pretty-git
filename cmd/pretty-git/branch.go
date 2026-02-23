@@ -12,7 +12,7 @@ import (
 )
 
 func runBranch() {
-	branches, err := git.ListBranches()
+	branches, err := git.ListLocalBranches()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
 		os.Exit(1)
