@@ -27,8 +27,7 @@ archives:
     format: tar.gz
     name_template: "pgit_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
-      - LICENSE*
-      - README*
+      - none*
 
 nfpms:
   - id: pgit-deb
@@ -42,8 +41,6 @@ nfpms:
       - deb
     bindir: /usr/local/bin
     contents:
-      - src: ./pgit
-        dst: /usr/local/bin/pgit
       - dst: /usr/local/bin/pretty-git
         type: symlink
         src: /usr/local/bin/pgit
