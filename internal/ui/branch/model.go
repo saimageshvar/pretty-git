@@ -63,7 +63,6 @@ type Model struct {
 	repoName    string
 	localCount  int
 	remoteCount int
-	splitPane   bool
 
 	filterInput textinput.Model
 	help        help.Model
@@ -99,7 +98,7 @@ type editSavedMsg struct {
 	behind int
 }
 
-func New(branches []git.Branch, repoName string, termWidth, termHeight int, splitPane bool) Model {
+func New(branches []git.Branch, repoName string, termWidth, termHeight int) Model {
 	local, remote := 0, 0
 	for _, b := range branches {
 		if b.IsRemote {
@@ -181,7 +180,6 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int, spli
 		repoName:         repoName,
 		localCount:       local,
 		remoteCount:      remote,
-		splitPane:        splitPane,
 		filterInput:      ti,
 		editParentFilter: epf,
 		editDescInput:    edi,
@@ -757,32 +755,14 @@ func (m Model) View() string {
 		ui.StyleAccent.Render(m.repoName) + "  " + badge + "\n")
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
 
-	if m.splitPane {
-		lw := m.listWidth()
-		dw := m.detailWidth()
+	lw := m.listWidth()
+	dw := m.detailWidth()
 
-		sb.WriteString(m.renderSplitColHeaders(lw) + "\n")
-		if len(m.filtered) == 0 {
-			sb.WriteString(ui.StyleDim.Render("  no branches match\n"))
-		} else {
-			sb.WriteString(m.renderSplitBody(lw, dw))
-		}
+	sb.WriteString(m.renderSplitColHeaders(lw) + "\n")
+	if len(m.filtered) == 0 {
+		sb.WriteString(ui.StyleDim.Render("  no branches match\n"))
 	} else {
-		// Column headers
-		sb.WriteString(renderHeaders(m.width) + "\n")
-
-		// Branch rows
-		end := m.offset + m.visibleRows
-		if end > len(m.filtered) {
-			end = len(m.filtered)
-		}
-		if len(m.filtered) == 0 {
-			sb.WriteString(ui.StyleDim.Render("  no branches match\n"))
-		} else {
-			for i := m.offset; i < end; i++ {
-				sb.WriteString(renderRow(m.filtered[i], i == m.cursor, m.width) + "\n")
-			}
-		}
+		sb.WriteString(m.renderSplitBody(lw, dw))
 	}
 
 	// Footer
@@ -942,98 +922,10 @@ func (m Model) editFooter() string {
 		ui.StyleKeyHint.Render("esc") + dc.Render(" cancel")
 }
 
-// focusedName returns the full branch name under the cursor, or "" if none.
-func (m Model) focusedName() string {
-	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
-		return ""
-	}
-	return m.filtered[m.cursor].branch.Name
-}
 
-// ── Footer info lines ──────────────────────────────────────────────────────
 
-type footerInfoLine func(m Model) string
-
-var footerInfoLines = []footerInfoLine{
-	footerNamePin,
-	footerBranchDesc,
-	footerParentStatusDesc,
-}
-
-func footerNamePin(m Model) string {
-	name := m.focusedName()
-	if name == "" {
-		return ""
-	}
-	label := ui.StyleDim.Render("  branch  ")
-	value := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true).Render(name)
-	return label + value
-}
-
-func footerBranchDesc(m Model) string {
-	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
-		return ""
-	}
-	b := m.filtered[m.cursor].branch
-	if b.Description == "" || b.IsRemote {
-		return ""
-	}
-	label := ui.StyleDim.Render("  desc    ")
-	value := lipgloss.NewStyle().Foreground(ui.ColorDesc).Italic(true).Render(b.Description)
-	return label + value
-}
-
-func footerParentStatusDesc(m Model) string {
-	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
-		return ""
-	}
-	b := m.filtered[m.cursor].branch
-	if b.Parent == "" || b.IsRemote {
-		return ""
-	}
-
-	parent := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(b.Parent)
-	switch {
-	case b.ParentAhead == 0:
-		return "  " + lipgloss.NewStyle().Foreground(ui.ColorParentMerged).Bold(true).Render("✓") +
-			ui.StyleDim.Render(" all commits merged into ") + parent
-	case b.ParentBehind == 0:
-		ahead := lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render(
-			fmt.Sprintf("↑%d", b.ParentAhead),
-		)
-		return "  " + ahead + ui.StyleDim.Render(" ahead of ") + parent + ui.StyleDim.Render(" · ready to merge")
-	default:
-		ahead := lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render(
-			fmt.Sprintf("↑%d", b.ParentAhead),
-		)
-		behind := lipgloss.NewStyle().Foreground(ui.ColorParentDiverged).Bold(true).Render(
-			fmt.Sprintf("↓%d", b.ParentBehind),
-		)
-		return "  " + ahead + ui.StyleDim.Render(" ahead · ") + behind + ui.StyleDim.Render(" behind ") +
-			parent + ui.StyleDim.Render(" — rebase needed")
-	}
-}
-
-func (m Model) renderInfoLines() string {
-	var lines []string
-	for _, fn := range footerInfoLines {
-		if l := fn(m); l != "" {
-			lines = append(lines, l)
-		}
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	divider := "\n" + ui.StyleDivider.Render(strings.Repeat("─", m.width))
-	return divider + "\n" + strings.Join(lines, "\n")
-}
 
 func (m Model) footer() string {
-	// In split pane mode, branch info is shown in the right pane — skip footer info lines.
-	var info string
-	if !m.splitPane {
-		info = m.renderInfoLines()
-	}
 	filterPrompt := "  " + ui.StyleDim.Render("filter: ") + m.filterInput.View()
 	hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
 
@@ -1042,10 +934,10 @@ func (m Model) footer() string {
 		return lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render("  " + m.spinner.View() + " switching branch…")
 
 	case m.err != "":
-		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + filterPrompt + "\n" + hints + info
+		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + filterPrompt + "\n" + hints
 
 	default:
-		return filterPrompt + "\n" + hints + info
+		return filterPrompt + "\n" + hints
 	}
 }
 
