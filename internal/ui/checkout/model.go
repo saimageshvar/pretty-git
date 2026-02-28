@@ -19,10 +19,113 @@ const (
 	focusParent = 1
 	focusDesc   = 2
 
-	labelW       = 15 // visual width of label column
-	inputW       = 36 // textinput visual width
-	maxPickerRows = 9 // max rows shown in parent picker
+	labelW        = 15 // visual width of label column
+	maxPickerRows = 9  // max rows shown in parent picker
+	inputMinW     = 36 // minimum textinput visual width
 )
+
+// inputWidth returns the available width for text input fields, filling the
+// terminal width minus the indent (2), space (1), and label column (labelW).
+func (m Model) inputWidth() int {
+	w := m.width - 2 - 1 - labelW
+	if w < inputMinW {
+		w = inputMinW
+	}
+	return w
+}
+
+// parentFilterWidth returns the display width for the parent filter input.
+// When a parent is selected, extra prefix text ("  filter: " + name) reduces
+// the available space.
+func (m Model) parentFilterWidth() int {
+	iw := m.inputWidth()
+	if m.selectedParent != "" {
+		// prefix: selectedParent + "  " + "filter: " = len(selectedParent) + 10
+		taken := lipgloss.Width(m.selectedParent) + 10
+		iw -= taken
+		if iw < 10 {
+			iw = 10
+		}
+	}
+	return iw
+}
+
+// syncInputWidths keeps the parent-filter textinput sized to the current layout.
+// nameInput and descInput are rendered with custom hard-wrapping so their
+// textinput Width is set to 0 (disables internal scrolling viewport).
+func (m *Model) syncInputWidths() {
+	m.nameInput.Width = 0
+	m.descInput.Width = 0
+	m.parentFilter.Width = m.parentFilterWidth()
+}
+
+// renderWrappingInput hard-wraps a textinput value at iw columns.
+// The first wrapped line is returned as-is; continuation lines are prefixed
+// with indent so they align with the input start column.
+// Uses Value() and Position() — does NOT call the textinput's own View().
+func renderWrappingInput(ti textinput.Model, focused bool, iw int, indent string) string {
+	value := ti.Value()
+	runes := []rune(value)
+
+	textSt   := lipgloss.NewStyle().Foreground(ui.ColorHeader)
+	cursorSt := lipgloss.NewStyle().Foreground(ui.ColorAccent).Reverse(true)
+	dimSt    := lipgloss.NewStyle().Foreground(ui.ColorDim)
+
+	// Empty field — show placeholder (+ cursor when focused)
+	if len(runes) == 0 {
+		if !focused {
+			return dimSt.Render(ti.Placeholder)
+		}
+		return cursorSt.Render(" ") + dimSt.Render(ti.Placeholder)
+	}
+
+	// Hard-wrap into iw-wide chunks
+	var chunks [][]rune
+	tmp := runes
+	for len(tmp) > 0 {
+		if len(tmp) <= iw {
+			chunks = append(chunks, tmp)
+			break
+		}
+		chunks = append(chunks, tmp[:iw])
+		tmp = tmp[iw:]
+	}
+
+	cursorPos := ti.Position()
+	cursorLine := cursorPos / iw
+	cursorCol  := cursorPos % iw
+
+	// Cursor sits exactly at a chunk boundary (e.g. position 102 with iw=102):
+	// cursorLine points past the last chunk — add an empty chunk for the cursor.
+	if cursorLine >= len(chunks) {
+		chunks = append(chunks, []rune{})
+	}
+
+	var lines []string
+	for i, chunk := range chunks {
+		if !focused || i != cursorLine {
+			lines = append(lines, textSt.Render(string(chunk)))
+			continue
+		}
+		var sb strings.Builder
+		if cursorCol < len(chunk) {
+			sb.WriteString(textSt.Render(string(chunk[:cursorCol])))
+			sb.WriteString(cursorSt.Render(string(chunk[cursorCol])))
+			sb.WriteString(textSt.Render(string(chunk[cursorCol+1:])))
+		} else {
+			sb.WriteString(textSt.Render(string(chunk)))
+			sb.WriteString(cursorSt.Render(" "))
+		}
+		lines = append(lines, sb.String())
+	}
+
+	for i := range lines {
+		if i > 0 {
+			lines[i] = indent + lines[i]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -87,7 +190,7 @@ func New(
 ) Model {
 	allItems := buildPickerItems(branches)
 
-	makeInput := func(placeholder string, charLimit int) textinput.Model {
+	makeTextInput := func(placeholder string, charLimit int) textinput.Model {
 		ti := textinput.New()
 		ti.Prompt = ""
 		ti.PromptStyle = lipgloss.NewStyle()
@@ -99,12 +202,12 @@ func New(
 		return ti
 	}
 
-	ni := makeInput("feature/my-branch", 100)
+	ni := makeTextInput("feature/my-branch", 250)
 	ni.SetValue(initialName)
 
-	pf := makeInput("type to filter…", 80)
+	pf := makeTextInput("type to filter…", 80)
 
-	di := makeInput("short description…", 120)
+	di := makeTextInput("short description…", 1000)
 	di.SetValue(initialDesc)
 
 	sp := spinner.New()
@@ -134,6 +237,7 @@ func New(
 		spinner:        sp,
 	}
 
+	m.syncInputWidths()
 	m.applyPickerFilter()
 	m.preselectParent()
 
@@ -162,6 +266,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.syncInputWidths()
 		return m, nil
 
 	case createDoneMsg:
@@ -226,11 +331,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectedParent = ""
 			m.parentFilter.Reset()
 			m.applyPickerFilter()
+			m.syncInputWidths()
 			return m, nil
 		}
 	}
 
-	// Route keypress to the focused textinput
+	// Route keypress to the focused input
 	switch m.focused {
 	case focusName:
 		var cmd tea.Cmd
@@ -291,6 +397,7 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.selectedParent = m.pickerItems[m.pickerCursor].branch.Name
 			m.parentFilter.Reset()
 			m.applyPickerFilter()
+			m.syncInputWidths()
 		}
 		return m.moveFocus(1)
 
@@ -428,38 +535,40 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFieldName() string {
-	label := fieldLabel("⎇ Branch:", m.focused == focusName)
-	return "  " + label + " " + lipgloss.NewStyle().Width(inputW).Render(m.nameInput.View())
+	focused := m.focused == focusName
+	label := fieldLabel("⎇ Branch:", focused)
+	indent := strings.Repeat(" ", 2+labelW+1)
+	return "  " + label + " " + renderWrappingInput(m.nameInput, focused, m.inputWidth(), indent)
 }
 
 func (m Model) renderFieldParent() string {
 	focused := m.focused == focusParent
 	label := fieldLabel("⎇ Parent:", focused)
+	iw := m.inputWidth()
 
 	if focused {
 		// Show filter input; prepend selected branch name if one is confirmed
 		if m.selectedParent != "" {
 			selS := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).
 				Render(m.selectedParent)
-			filterS := lipgloss.NewStyle().
-				Width(inputW - lipgloss.Width(m.selectedParent) - 2).
-				Render(m.parentFilter.View())
-			return "  " + label + " " + selS + "  " + ui.StyleDim.Render("filter: ") + filterS
+			return "  " + label + " " + selS + "  " + ui.StyleDim.Render("filter: ") + m.parentFilter.View()
 		}
-		return "  " + label + " " + lipgloss.NewStyle().Width(inputW).Render(m.parentFilter.View())
+		return "  " + label + " " + m.parentFilter.View()
 	}
 
 	if m.selectedParent != "" {
 		val := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).
-			Width(inputW).Render(m.selectedParent)
+			Width(iw).Render(m.selectedParent)
 		return "  " + label + " " + val
 	}
-	return "  " + label + " " + lipgloss.NewStyle().Foreground(ui.ColorDim).Width(inputW).Render("(none)")
+	return "  " + label + " " + lipgloss.NewStyle().Foreground(ui.ColorDim).Width(iw).Render("(none)")
 }
 
 func (m Model) renderFieldDesc() string {
-	label := fieldLabel("✎ Desc:", m.focused == focusDesc)
-	return "  " + label + " " + lipgloss.NewStyle().Width(inputW).Render(m.descInput.View())
+	focused := m.focused == focusDesc
+	label := fieldLabel("✎ Desc:", focused)
+	indent := strings.Repeat(" ", 2+labelW+1)
+	return "  " + label + " " + renderWrappingInput(m.descInput, focused, m.inputWidth(), indent)
 }
 
 func fieldLabel(text string, focused bool) string {
@@ -469,6 +578,7 @@ func fieldLabel(text string, focused bool) string {
 	}
 	return s.Foreground(ui.ColorDim).Render(text)
 }
+
 
 // ── Picker panel ───────────────────────────────────────────────────────────
 

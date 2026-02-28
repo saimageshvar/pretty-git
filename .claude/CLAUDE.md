@@ -12,6 +12,13 @@ Prettifies git command output with aesthetic, information-dense TUI views.
 - **Bubble Tea** — TUI framework (see constraint below)
 - **Packaging** — `.deb` for Ubuntu
 
+## Build & Install
+After every code change, build and install the binary as **`pgit_local`**:
+```bash
+go build -o ~/bin/pgit_local ./cmd/pretty-git
+```
+Test with `pgit_local` in `~/projects/pg-test`. Do **not** build to `pgit`.
+
 ## Critical TUI Constraint
 **Inline rendering only — like fzf. Never use `tea.WithAltScreen()`.**
 The program renders inside the terminal's scrollback. Users see output after quitting, history is preserved.
