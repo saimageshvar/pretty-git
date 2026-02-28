@@ -13,6 +13,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  checkout <name>           switch to branch (create if missing)")
 		fmt.Fprintln(os.Stderr, "  checkout -b [name]        create new branch")
 		fmt.Fprintln(os.Stderr, "  log                       browse commit log")
+		fmt.Fprintln(os.Stderr, "  prompt                    current branch & description for shell prompt")
 		fmt.Fprintln(os.Stderr, "  stash                     interactive stash create wizard")
 		fmt.Fprintln(os.Stderr, "  stash apply|pop|drop      browse stashes and apply/pop/drop")
 		fmt.Fprintln(os.Stderr, "  stash \"msg\"               quick stash all with message")
@@ -28,6 +29,8 @@ func main() {
 		runCheckout(os.Args[2:])
 	case "log":
 		runLog()
+	case "prompt":
+		runPrompt(os.Args[2:])
 	case "stash":
 		runStash(os.Args[2:])
 	default:
