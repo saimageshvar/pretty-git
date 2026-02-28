@@ -442,8 +442,10 @@ func (m *Model) applyPickerFilter() {
 	} else {
 		var out []renderItem
 		for _, item := range m.allItems {
-			if strings.Contains(strings.ToLower(item.branch.Name), q) {
-				out = append(out, renderItem{branch: item.branch})
+			b := item.branch
+			if strings.Contains(strings.ToLower(b.Name), q) ||
+				strings.Contains(strings.ToLower(b.Description), q) {
+				out = append(out, renderItem{branch: b})
 			}
 		}
 		m.pickerItems = out
@@ -580,6 +582,35 @@ func fieldLabel(text string, focused bool) string {
 }
 
 
+// ── Picker column layout ───────────────────────────────────────────────────
+
+// pickerColumnWidths computes fixed name and description column widths for the
+// parent picker, mirroring the approach used by the branch list's columnWidths.
+//
+// Fixed overhead per row: 2 (left pad) + 1 (marker) + 2 (sep) + 2 (sep) = 7
+// treePrefix length is variable and subtracted per-row from nameW.
+// Description gets ~35% of available space (bounded to [14, 48]).
+// Name gets the remainder.
+func pickerColumnWidths(termWidth int) (totalNameW, descW int) {
+	const fixed = 2 + 1 + 2 + 2 // leftpad + marker + sep×2
+	avail := termWidth - fixed
+	if avail < 1 {
+		return 20, 0
+	}
+	descW = avail * 35 / 100
+	if descW < 14 {
+		descW = 14
+	}
+	if descW > 48 {
+		descW = 48
+	}
+	totalNameW = avail - descW
+	if totalNameW < 12 {
+		totalNameW = 12
+	}
+	return
+}
+
 // ── Picker panel ───────────────────────────────────────────────────────────
 
 func (m Model) pickerLines(width int) []string {
@@ -595,45 +626,44 @@ func (m Model) pickerLines(width int) []string {
 		end = len(m.pickerItems)
 	}
 
-	// Reserve: 4 leading chars ("    " or "  » ") + prefix + name (capped) + 2 sep + desc
-	const indent = 4
-	const nameMax = 28
-	const descSep = 2
+	const colPad = 2
+	sep := strings.Repeat(" ", colPad)
+
+	totalNameW, descW := pickerColumnWidths(width)
 
 	for i := m.pickerOffset; i < end; i++ {
 		item := m.pickerItems[i]
 		b := item.branch
 
 		prefixLen := len([]rune(item.treePrefix))
-		avail := width - indent - prefixLen
-		nameW := avail
-		if nameW > nameMax {
-			nameW = nameMax
+		nameW := totalNameW - prefixLen
+		if nameW < 8 {
+			nameW = 8
 		}
-		if nameW < 4 {
-			nameW = 4
-		}
-		name := truncate(b.Name, nameW)
 
-		// Give description all remaining space
-		descW := width - indent - prefixLen - nameW - descSep
-		desc := ""
-		if b.Description != "" && descW > 4 {
-			desc = "  " + ui.StyleDesc.Italic(true).Render(truncate(b.Description, descW))
-		}
+		nameText := truncate(b.Name, nameW)
+		descText := truncate(b.Description, descW)
 
 		if i == m.pickerCursor {
-			row := lipgloss.NewStyle().
-				Background(ui.ColorCursorBg).
-				Foreground(ui.ColorCursorFg).
-				Bold(true).
-				Width(width - 2).
-				Render("  » " + item.treePrefix + name + desc)
-			lines = append(lines, row)
+			bg := ui.ColorCursorBg
+			bgSep    := lipgloss.NewStyle().Background(bg).Render(sep)
+			leftPad  := lipgloss.NewStyle().Background(bg).Render("  ")
+			markerS  := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorAccent).Render("»")
+			prefixS  := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDim).Render(item.treePrefix)
+			nameS    := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(nameW).Render(nameText)
+			descS    := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDesc).Italic(true).Width(descW).Render(descText)
+			used     := 2 + 1 + colPad + totalNameW + colPad + descW
+			trail    := ""
+			if width > used {
+				trail = lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", width-used))
+			}
+			lines = append(lines, leftPad+markerS+bgSep+prefixS+nameS+bgSep+descS+trail)
 		} else {
 			prefixS := ui.StyleTreeConnector.Render(item.treePrefix)
-			nameS := lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(name)
-			lines = append(lines, "    "+prefixS+nameS+desc)
+			nameS   := lipgloss.NewStyle().Foreground(ui.ColorHeader).Width(nameW).Render(nameText)
+			descS   := ui.StyleDesc.Italic(true).Render(descText)
+			// "  " (leftpad=2) + " " (blank marker=1) + sep(colPad) = same indent as cursor row
+			lines = append(lines, "  "+" "+sep+prefixS+nameS+sep+descS)
 		}
 	}
 
