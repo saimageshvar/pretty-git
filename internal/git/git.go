@@ -299,6 +299,11 @@ func readAllDescriptions() map[string]string {
 	return descs
 }
 
+// GetDescription returns the pgit description for branch, or "" if unset.
+func GetDescription(branch string) string {
+	return readAllDescriptions()[branch]
+}
+
 // SetDescription writes `branch.<name>.pgit-desc = <desc>` into local git config.
 func SetDescription(branch, desc string) error {
 	key := fmt.Sprintf("branch.%s.pgit-desc", branch)

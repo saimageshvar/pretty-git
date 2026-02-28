@@ -20,10 +20,13 @@ const (
 	colMarker   = 1
 	colNameMin  = 20 // minimum name column width
 	colNameMax  = 60 // maximum name column width
+	colDescMax  = 55 // maximum description column width
 	colStatus   = 12 // "✓ merged", "↑99 ↓99", etc.
-	colDesc     = 25 // branch description (truncated)
 	colPad      = 2
 	maxVisible  = 15 // max rows shown at once (inline / fzf-style)
+
+	// split pane
+	detailPanePct = 40 // right detail pane as % of terminal width
 
 	// edit form
 	editFocusParent   = 0
@@ -524,6 +527,215 @@ func (m *Model) editClampScroll() {
 	}
 }
 
+// ── Split pane layout ──────────────────────────────────────────────────────
+
+// listWidth returns the char width of the left (branch list) pane.
+// Minimum is 54 = 19 (fixed overhead) + colNameMin(20) + colDescMin(15),
+// which ensures the row never overflows the pane width.
+func (m Model) listWidth() int {
+	dw := m.width * detailPanePct / 100
+	lw := m.width - dw - 3 // " │ "
+	const minLW = 19 + colNameMin + 15 // = 54
+	if lw < minLW {
+		lw = minLW
+	}
+	return lw
+}
+
+// detailWidth returns the char width of the right (detail) pane.
+func (m Model) detailWidth() int {
+	dw := m.width - m.listWidth() - 3
+	if dw < 20 {
+		dw = 20
+	}
+	return dw
+}
+
+// buildBranchDetailLines builds the content lines for the right detail pane
+// for the given branch, each padded/fitted to dw chars.
+// wrapForPane wraps raw text to fit within maxW visible chars per line.
+// Uses word-wrap when spaces are present (descriptions), otherwise
+// character-level wrap (branch names with no spaces).
+func wrapForPane(text string, maxW int) []string {
+	if maxW < 1 {
+		return []string{text}
+	}
+	runes := []rune(text)
+	if len(runes) <= maxW {
+		return []string{text}
+	}
+	// Word-wrap when spaces exist.
+	if strings.ContainsRune(text, ' ') {
+		var lines []string
+		cur := ""
+		for _, word := range strings.Fields(text) {
+			switch {
+			case cur == "":
+				cur = word
+			case len([]rune(cur))+1+len([]rune(word)) <= maxW:
+				cur += " " + word
+			default:
+				lines = append(lines, cur)
+				cur = word
+			}
+		}
+		if cur != "" {
+			lines = append(lines, cur)
+		}
+		return lines
+	}
+	// No spaces: hard-wrap at character boundaries.
+	var lines []string
+	for len(runes) > 0 {
+		if len(runes) <= maxW {
+			lines = append(lines, string(runes))
+			break
+		}
+		lines = append(lines, string(runes[:maxW]))
+		runes = runes[maxW:]
+	}
+	return lines
+}
+
+// appendWrapped styles and appends wrapped lines of text to lines.
+// firstPrefix is used for line 0; contPrefix (same width, spaces) for continuations.
+func appendWrapped(lines []string, text, firstPrefix, contPrefix string, dw int, style lipgloss.Style) []string {
+	textW := dw - len([]rune(firstPrefix))
+	if textW < 4 {
+		textW = 4
+	}
+	chunks := wrapForPane(text, textW)
+	for i, chunk := range chunks {
+		prefix := contPrefix
+		if i == 0 {
+			prefix = firstPrefix
+		}
+		lines = append(lines, fitDetailLine(prefix+style.Render(chunk), dw))
+	}
+	return lines
+}
+
+func buildBranchDetailLines(b git.Branch, dw int) []string {
+	var lines []string
+
+	// Branch name — hard-wraps at character boundaries if longer than pane.
+	lines = append(lines, "")
+	lines = appendWrapped(lines, b.Name,
+		"  ⎇ ", "    ", dw,
+		lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true))
+
+	// Description — word-wraps across multiple lines if needed.
+	if b.Description != "" && !b.IsRemote {
+		lines = append(lines, "")
+		lines = appendWrapped(lines, b.Description,
+			"  ", "  ", dw,
+			lipgloss.NewStyle().Foreground(ui.ColorDesc).Italic(true))
+	}
+
+	// Parent name — wraps if the branch name is long.
+	if b.Parent != "" && !b.IsRemote {
+		lines = append(lines, "")
+		lines = appendWrapped(lines, b.Parent,
+			"  parent  ", "          ", dw,
+			lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true))
+
+		// Status relative to parent — single colour per state so wrapForPane works cleanly.
+		var statusText string
+		var statusStyle lipgloss.Style
+		switch {
+		case b.ParentAhead == 0:
+			statusText = "✓ all commits merged"
+			statusStyle = lipgloss.NewStyle().Foreground(ui.ColorParentMerged).Bold(true)
+		case b.ParentBehind == 0:
+			statusText = fmt.Sprintf("↑%d ahead · ready to merge", b.ParentAhead)
+			statusStyle = lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true)
+		default:
+			statusText = fmt.Sprintf("↑%d ahead · ↓%d behind · rebase needed", b.ParentAhead, b.ParentBehind)
+			statusStyle = lipgloss.NewStyle().Foreground(ui.ColorParentDiverged).Bold(true)
+		}
+		lines = appendWrapped(lines, statusText, "  ", "  ", dw, statusStyle)
+	}
+
+	// Last commit time.
+	if b.RelTime != "" {
+		lines = append(lines, "")
+		lines = appendWrapped(lines, b.RelTime,
+			"  last commit  ", "               ", dw,
+			lipgloss.NewStyle().Foreground(ui.ColorRelTime))
+	}
+
+	return lines
+}
+
+// fitDetailLine fits s to exactly dw visible chars: pads if shorter, truncates if longer.
+func fitDetailLine(s string, dw int) string {
+	vis := lipgloss.Width(s)
+	if vis == dw {
+		return s
+	}
+	if vis < dw {
+		return s + strings.Repeat(" ", dw-vis)
+	}
+	return lipgloss.NewStyle().MaxWidth(dw).Render(s)
+}
+
+// renderSplitColHeaders renders the column header row spanning both panes.
+func (m Model) renderSplitColHeaders(lw int) string {
+	listPart := lipgloss.NewStyle().Width(lw).MaxWidth(lw).Render(renderHeaders(lw))
+	divider := lipgloss.NewStyle().Foreground(ui.ColorDivider).Render("│")
+	title := ui.StyleDim.Render("  Branch detail")
+	return listPart + " " + divider + " " + title
+}
+
+// renderSplitBody renders all visible rows: branch list on left, detail pane on right.
+func (m Model) renderSplitBody(lw, dw int) string {
+	end := m.offset + m.visibleRows
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+
+	divider := lipgloss.NewStyle().Foreground(ui.ColorDivider).Render("│")
+
+	// Build detail lines for the currently selected branch.
+	var detailLines []string
+	if len(m.filtered) > 0 && m.cursor < len(m.filtered) {
+		detailLines = buildBranchDetailLines(m.filtered[m.cursor].branch, dw)
+	}
+
+	detailLineAt := func(i int) string {
+		if i < len(detailLines) {
+			return detailLines[i]
+		}
+		return strings.Repeat(" ", dw)
+	}
+
+	var rows []string
+	for i := m.offset; i < end; i++ {
+		listRow := renderRow(m.filtered[i], i == m.cursor, lw)
+		// Normalize to exactly lw visible chars so the │ divider stays aligned
+		// regardless of how long the RelTime string is.
+		if vis := lipgloss.Width(listRow); vis < lw {
+			listRow += strings.Repeat(" ", lw-vis)
+		} else if vis > lw {
+			listRow = lipgloss.NewStyle().MaxWidth(lw).Render(listRow)
+		}
+		rows = append(rows, listRow+" "+divider+" "+detailLineAt(i-m.offset))
+	}
+
+	// Fill rows up to max(visibleRows, len(detailLines)) so the right pane
+	// always shows its full content even when only 1-2 branches exist.
+	fillTo := m.visibleRows
+	if len(detailLines) > fillTo {
+		fillTo = len(detailLines)
+	}
+	emptyList := strings.Repeat(" ", lw+1) // lw + space before divider
+	for i := end - m.offset; i < fillTo; i++ {
+		rows = append(rows, emptyList+divider+" "+detailLineAt(i))
+	}
+
+	return strings.Join(rows, "\n") + "\n"
+}
+
 // ── View ───────────────────────────────────────────────────────────────────
 
 func (m Model) View() string {
@@ -543,20 +755,14 @@ func (m Model) View() string {
 		ui.StyleAccent.Render(m.repoName) + "  " + badge + "\n")
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
 
-	// Column headers
-	sb.WriteString(renderHeaders(m.width) + "\n")
+	lw := m.listWidth()
+	dw := m.detailWidth()
 
-	// Branch rows
-	end := m.offset + m.visibleRows
-	if end > len(m.filtered) {
-		end = len(m.filtered)
-	}
+	sb.WriteString(m.renderSplitColHeaders(lw) + "\n")
 	if len(m.filtered) == 0 {
 		sb.WriteString(ui.StyleDim.Render("  no branches match\n"))
 	} else {
-		for i := m.offset; i < end; i++ {
-			sb.WriteString(renderRow(m.filtered[i], i == m.cursor, m.width) + "\n")
-		}
+		sb.WriteString(m.renderSplitBody(lw, dw))
 	}
 
 	// Footer
@@ -716,94 +922,10 @@ func (m Model) editFooter() string {
 		ui.StyleKeyHint.Render("esc") + dc.Render(" cancel")
 }
 
-// focusedName returns the full branch name under the cursor, or "" if none.
-func (m Model) focusedName() string {
-	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
-		return ""
-	}
-	return m.filtered[m.cursor].branch.Name
-}
 
-// ── Footer info lines ──────────────────────────────────────────────────────
 
-type footerInfoLine func(m Model) string
-
-var footerInfoLines = []footerInfoLine{
-	footerNamePin,
-	footerBranchDesc,
-	footerParentStatusDesc,
-}
-
-func footerNamePin(m Model) string {
-	name := m.focusedName()
-	if name == "" {
-		return ""
-	}
-	label := ui.StyleDim.Render("  branch  ")
-	value := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Italic(true).Render(name)
-	return label + value
-}
-
-func footerBranchDesc(m Model) string {
-	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
-		return ""
-	}
-	b := m.filtered[m.cursor].branch
-	if b.Description == "" || b.IsRemote {
-		return ""
-	}
-	label := ui.StyleDim.Render("  desc    ")
-	value := lipgloss.NewStyle().Foreground(ui.ColorDesc).Italic(true).Render(b.Description)
-	return label + value
-}
-
-func footerParentStatusDesc(m Model) string {
-	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
-		return ""
-	}
-	b := m.filtered[m.cursor].branch
-	if b.Parent == "" || b.IsRemote {
-		return ""
-	}
-
-	parent := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(b.Parent)
-	switch {
-	case b.ParentAhead == 0:
-		return "  " + lipgloss.NewStyle().Foreground(ui.ColorParentMerged).Bold(true).Render("✓") +
-			ui.StyleDim.Render(" all commits merged into ") + parent
-	case b.ParentBehind == 0:
-		ahead := lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render(
-			fmt.Sprintf("↑%d", b.ParentAhead),
-		)
-		return "  " + ahead + ui.StyleDim.Render(" ahead of ") + parent + ui.StyleDim.Render(" · ready to merge")
-	default:
-		ahead := lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render(
-			fmt.Sprintf("↑%d", b.ParentAhead),
-		)
-		behind := lipgloss.NewStyle().Foreground(ui.ColorParentDiverged).Bold(true).Render(
-			fmt.Sprintf("↓%d", b.ParentBehind),
-		)
-		return "  " + ahead + ui.StyleDim.Render(" ahead · ") + behind + ui.StyleDim.Render(" behind ") +
-			parent + ui.StyleDim.Render(" — rebase needed")
-	}
-}
-
-func (m Model) renderInfoLines() string {
-	var lines []string
-	for _, fn := range footerInfoLines {
-		if l := fn(m); l != "" {
-			lines = append(lines, l)
-		}
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	divider := "\n" + ui.StyleDivider.Render(strings.Repeat("─", m.width))
-	return divider + "\n" + strings.Join(lines, "\n")
-}
 
 func (m Model) footer() string {
-	info := m.renderInfoLines()
 	filterPrompt := "  " + ui.StyleDim.Render("filter: ") + m.filterInput.View()
 	hints := "  " + m.help.ShortHelpView(m.keys.ShortHelp())
 
@@ -812,10 +934,10 @@ func (m Model) footer() string {
 		return lipgloss.NewStyle().Foreground(ui.ColorParentAhead).Bold(true).Render("  " + m.spinner.View() + " switching branch…")
 
 	case m.err != "":
-		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + filterPrompt + "\n" + hints + info
+		return "  " + ui.StyleError.Render("✗ "+m.err) + "\n" + filterPrompt + "\n" + hints
 
 	default:
-		return filterPrompt + "\n" + hints + info
+		return filterPrompt + "\n" + hints
 	}
 }
 
@@ -824,28 +946,47 @@ func (m Model) SwitchedTo() string { return m.switchedTo }
 
 // ── Row rendering ──────────────────────────────────────────────────────────
 
-// nameColWidth returns the total width of the name column (including tree prefix)
-// based on terminal width, clamped between colNameMin and colNameMax.
+// columnWidths dynamically allocates the name and description column widths
+// so they fill the available space after fixed columns (no time column).
+// The description gets ~40% of available space; name gets the rest.
+func columnWidths(termWidth int) (nameW, descW int) {
+	// Fixed overhead: indent(2) + marker(1) + 3×pad + status
+	const fixed = 2 + colMarker + 3*colPad + colStatus
+	avail := termWidth - fixed
+	if avail < 1 {
+		return colNameMin, 0
+	}
+	descW = avail * 40 / 100
+	if descW < 15 {
+		descW = 15
+	}
+	if descW > colDescMax {
+		descW = colDescMax
+	}
+	nameW = avail - descW
+	if nameW < colNameMin {
+		nameW = colNameMin
+	}
+	if nameW > colNameMax {
+		nameW = colNameMax
+	}
+	return
+}
+
+// nameColWidth returns just the name column width (for callers that only need it).
 func nameColWidth(termWidth int) int {
-	// fixed overhead: indent(2) + marker(1) + 4×pad + status + desc + reltime(~14)
-	const fixedOverhead = 2 + colMarker + 4*colPad + colStatus + colDesc + 14
-	w := termWidth - fixedOverhead
-	if w < colNameMin {
-		w = colNameMin
-	}
-	if w > colNameMax {
-		w = colNameMax
-	}
-	return w
+	nw, _ := columnWidths(termWidth)
+	return nw
 }
 
 func renderHeaders(termWidth int) string {
 	sep := strings.Repeat(" ", colPad)
-	nameH   := lipgloss.NewStyle().Width(nameColWidth(termWidth)).Render(ui.StyleDim.Render("Branch"))
+	nw, dw := columnWidths(termWidth)
+	nameH   := lipgloss.NewStyle().Width(nw).Render(ui.StyleDim.Render("Branch"))
 	statusH := lipgloss.NewStyle().Width(colStatus).Render(ui.StyleDim.Render("vs parent"))
-	descH   := lipgloss.NewStyle().Width(colDesc).Render(ui.StyleDim.Render("Description"))
-	timeH   := ui.StyleDim.Render("Last commit")
-	return "   " + sep + nameH + sep + statusH + sep + descH + sep + timeH
+	descH   := ui.StyleDim.Render("Description")
+	_ = dw // desc header is unbounded (last column)
+	return "   " + sep + nameH + sep + statusH + sep + descH
 }
 
 func parentStatusText(b git.Branch) (text string, style lipgloss.Style) {
@@ -869,6 +1010,7 @@ func parentStatusText(b git.Branch) (text string, style lipgloss.Style) {
 func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	b := item.branch
 
+	_, dw := columnWidths(termWidth)
 	prefixW := len([]rune(item.treePrefix))
 	nameW := nameColWidth(termWidth) - prefixW
 	if nameW < 8 {
@@ -885,8 +1027,7 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 
 	nameText := padRight(truncate(b.Name, nameW), nameW)
 	statusText, statusStyle := parentStatusText(b)
-	descText := padRight(truncate(b.Description, colDesc), colDesc)
-	timeText := b.RelTime
+	descText := truncate(b.Description, dw)
 
 	sep := strings.Repeat(" ", colPad)
 
@@ -897,15 +1038,14 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 		prefixS := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDim).Render(item.treePrefix)
 		nameS   := lipgloss.NewStyle().Background(bg).Bold(true).Foreground(ui.ColorCursorFg).Width(nameW).Render(nameText)
 		statusS := statusStyle.Background(bg).Width(colStatus).Render(statusText)
-		descS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDesc).Italic(true).Width(colDesc).Render(descText)
-		timeS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorRelTime).Render(timeText)
+		descS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorDesc).Italic(true).Width(dw).Render(descText)
 		leftPad := lipgloss.NewStyle().Background(bg).Render("  ")
-		used := 2 + colMarker + colPad + nameColWidth(termWidth) + colPad + colStatus + colPad + colDesc + colPad + len([]rune(timeText))
+		used := 2 + colMarker + colPad + nameColWidth(termWidth) + colPad + colStatus + colPad + dw
 		trail := ""
 		if termWidth > used {
 			trail = lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", termWidth-used))
 		}
-		return leftPad + markerS + bgSep + prefixS + nameS + bgSep + statusS + bgSep + descS + bgSep + timeS + trail
+		return leftPad + markerS + bgSep + prefixS + nameS + bgSep + statusS + bgSep + descS + trail
 	}
 
 	prefixS := ui.StyleTreeConnector.Render(item.treePrefix)
@@ -922,10 +1062,9 @@ func renderRow(item renderItem, isSelected bool, termWidth int) string {
 	}
 
 	statusS := statusStyle.Width(colStatus).Render(statusText)
-	descS   := ui.StyleDesc.Italic(true).Width(colDesc).Render(descText)
-	timeS   := ui.StyleRelTime.Render(timeText)
+	descS   := ui.StyleDesc.Italic(true).Render(descText)
 
-	return "  " + markerS + sep + prefixS + nameS + sep + statusS + sep + descS + sep + timeS
+	return "  " + markerS + sep + prefixS + nameS + sep + statusS + sep + descS
 }
 
 // ── Git commands ───────────────────────────────────────────────────────────
@@ -1126,7 +1265,8 @@ func (m *Model) applyFilter() {
 	} else {
 		var out []renderItem
 		for _, b := range m.branches {
-			if strings.Contains(strings.ToLower(b.Name), q) {
+			if strings.Contains(strings.ToLower(b.Name), q) ||
+				strings.Contains(strings.ToLower(b.Description), q) {
 				out = append(out, renderItem{branch: b})
 			}
 		}
