@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -11,7 +12,25 @@ import (
 	"github.com/sai/pretty-git/internal/git"
 )
 
+// runBranchCmd parses flags for `pgit branch` and launches the TUI.
+func runBranchCmd(args []string) {
+	fs := flag.NewFlagSet("branch", flag.ExitOnError)
+	splitFlag := fs.Bool("split", false, "show vertical detail pane")
+	fs.BoolVar(splitFlag, "s", false, "show vertical detail pane (shorthand)")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
+		os.Exit(1)
+	}
+	runBranchImpl(*splitFlag)
+}
+
+// runBranch launches the branch switcher without a split pane.
+// Used by `pgit checkout` (no args) so it never gets the split flag.
 func runBranch() {
+	runBranchImpl(false)
+}
+
+func runBranchImpl(splitPane bool) {
 	branches, err := git.ListLocalBranches()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
@@ -29,7 +48,7 @@ func runBranch() {
 		width, height = 120, 40
 	}
 
-	m := branchui.New(branches, repoName, width, height)
+	m := branchui.New(branches, repoName, width, height, splitPane)
 
 	// Inline mode — no WithAltScreen
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))

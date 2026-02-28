@@ -18,7 +18,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "branch":
-		runBranch()
+		runBranchCmd(os.Args[2:])
 	case "checkout":
 		runCheckout(os.Args[2:])
 	case "log":
