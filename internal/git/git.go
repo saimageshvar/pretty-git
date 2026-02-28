@@ -53,6 +53,26 @@ func ListBranches() ([]Branch, error) {
 	return result, nil
 }
 
+// ListLocalBranches returns only local branches, sorted by most-recently-committed.
+// This is faster than ListBranches when the repo has many remote branches.
+func ListLocalBranches() ([]Branch, error) {
+	locals, err := listLocal()
+	if err != nil {
+		return nil, err
+	}
+
+	var current []Branch
+	var rest []Branch
+	for _, b := range locals {
+		if b.IsCurrent {
+			current = append(current, b)
+		} else {
+			rest = append(rest, b)
+		}
+	}
+	return append(current, rest...), nil
+}
+
 // listLocal parses `git branch -vv --sort=-committerdate`.
 func listLocal() ([]Branch, error) {
 	// format: <current> <name> <hash> [<upstream>] <subject>
