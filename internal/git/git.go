@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -730,44 +731,130 @@ func ListStashes() ([]StashEntry, error) {
 }
 
 // GetStashDetail fetches extended info for a single stash entry.
+//
+// A stash has three commits:
+//   stash@{N}    = WIP tree (full working-tree snapshot at stash time)
+//   stash@{N}^2  = index tree (staged changes at stash time)
+//   stash@{N}^3  = untracked files tree (only present with --include-untracked)
+//
+// `git stash show` diffs WIP vs HEAD, which is MISLEADING for pathspec stashes:
+// the WIP snapshot captures ALL staged file contents even when only one unstaged
+// file was targeted, making unrelated staged files appear as "stashed".
+//
+// Instead we use two precise diffs:
+//   1. HEAD → stash^2 : staged changes captured in the stash index
+//   2. stash^2 → stash : working-tree-only changes (the actual targeted files)
+//   3. stash^3        : untracked files (if present)
 func GetStashDetail(ref string) (StashDetail, error) {
-	// Get list of changed files with status
-	out, err := run("git", "stash", "show", "--name-status", ref)
-	if err != nil {
-		return StashDetail{}, err
-	}
+	return getStashDetail(ref, nil, nil)
+}
 
+// getStashDetail is the internal implementation. When currentStaged /
+// currentUnstaged are non-nil they are used directly, avoiding two extra git
+// commands (called from StashPush where the porcelain map is already known).
+func getStashDetail(ref string, currentStaged, currentUnstaged map[string]bool) (StashDetail, error) {
+	seen := make(map[string]bool)
 	var files []FileStatus
-	var filesChanged, insertions, deletions int
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-		if line == "" {
-			continue
+	var filesChanged int
+
+	parseDiff := func(out string, stagedChange bool, skip map[string]bool) {
+		for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			letter := strings.TrimRight(fields[0], "0123456789") // strip similarity score from R100, C100 etc.
+			path := fields[len(fields)-1]                        // renames: last field is the destination path
+			if seen[path] || skip[path] {
+				continue
+			}
+			seen[path] = true
+			filesChanged++
+			var fCode string
+			if stagedChange {
+				switch letter {
+				case "M":
+					fCode = "M "
+				case "A":
+					fCode = "A "
+				case "D":
+					fCode = "D "
+				default:
+					fCode = letter + " "
+				}
+			} else {
+				switch letter {
+				case "M":
+					fCode = " M"
+				case "A":
+					fCode = " A"
+				case "D":
+					fCode = " D"
+				default:
+					fCode = " " + letter
+				}
+			}
+			files = append(files, FileStatus{Code: fCode, Path: path})
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		code := fields[0]
-		path := fields[1]
-		// Map single-letter status to our 2-char code (staged perspective)
-		var fCode string
-		switch code {
-		case "M":
-			fCode = "M "
-		case "A":
-			fCode = "A "
-		case "D":
-			fCode = "D "
-		default:
-			fCode = code + " "
-		}
-		files = append(files, FileStatus{Code: fCode, Path: path})
-		filesChanged++
 	}
 
-	// Get diff stats
-	stat, err := run("git", "stash", "show", "--stat", ref)
-	if err == nil {
+	// Build sets of files currently staged/unstaged in the branch so we can
+	// exclude index-snapshot noise: stash^2 always captures the full index,
+	// even for pathspec stashes that only targeted a subset of files.
+	// A file still staged/unstaged in the branch was not actually stashed.
+	// Callers may pass precomputed sets to avoid redundant git commands.
+	if currentStaged == nil {
+		currentStaged = map[string]bool{}
+		if out, err := run("git", "diff", "--cached", "--name-only"); err == nil {
+			for _, p := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+				if p != "" {
+					currentStaged[p] = true
+				}
+			}
+		}
+	}
+	if currentUnstaged == nil {
+		currentUnstaged = map[string]bool{}
+		if out, err := run("git", "diff", "--name-only"); err == nil {
+			for _, p := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+				if p != "" {
+					currentUnstaged[p] = true
+				}
+			}
+		}
+	}
+
+	// 1. Staged changes captured in the stash index (HEAD → stash^2).
+	//    Skip files still staged in the branch — index snapshot, not stashed.
+	if out, err := run("git", "diff", "--name-status", "HEAD", ref+"^2"); err == nil {
+		parseDiff(out, true, currentStaged)
+	}
+
+	// 2. Working-tree-only changes (stash^2 → stash WIP).
+	//    Skip files still present as unstaged changes — not stashed.
+	if out, err := run("git", "diff", "--name-status", ref+"^2", ref); err == nil {
+		parseDiff(out, false, currentUnstaged)
+	}
+
+	// 3. Untracked files stored in stash^3 (present only for --include-untracked stashes)
+	if out, err := run("git", "ls-tree", "--name-only", ref+"^3"); err == nil {
+		for _, path := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+			if path == "" || seen[path] {
+				continue
+			}
+			seen[path] = true
+			filesChanged++
+			files = append(files, FileStatus{Code: "??", Path: path})
+		}
+	}
+
+	// Stats: use the combined WIP vs HEAD diff for line counts
+	var insertions, deletions int
+	stat, _ := run("git", "diff", "--stat", "HEAD", ref)
+	if stat != "" {
 		lines := strings.Split(strings.TrimRight(stat, "\n"), "\n")
 		if len(lines) > 0 {
 			summary := lines[len(lines)-1]
@@ -791,67 +878,218 @@ func GetStashDetail(ref string) (StashDetail, error) {
 	}, nil
 }
 
+// porcelainStatus returns a map of path → 2-char status code from
+// git status --porcelain. Used for pre/post verification.
+func stashCount() int {
+	out, err := exec.Command("git", "stash", "list", "--format=%H").Output()
+	if err != nil {
+		return 0
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return 0
+	}
+	return len(lines)
+}
+
+func porcelainStatus() (map[string]string, error) {
+	out, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string)
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		code := line[:2]
+		path := line[3:]
+		// Renames are "XY old -> new"; record the destination path.
+		if i := strings.Index(path, " -> "); i >= 0 {
+			path = path[i+4:]
+		}
+		m[path] = code
+	}
+	return m, nil
+}
+
+// checkNoCollateral compares porcelain status before/after a stash and returns
+// an error if any file outside targetSet changed state unexpectedly.
+func checkNoCollateral(before, after map[string]string, targetSet map[string]bool) error {
+	for path, bCode := range before {
+		if targetSet[path] {
+			continue
+		}
+		aCode, present := after[path]
+		if !present {
+			aCode = "  " // file disappeared
+		}
+		if aCode != bCode {
+			return fmt.Errorf("unexpected change to %s (was %q, now %q) — stash may have affected unintended files", path, bCode, aCode)
+		}
+	}
+	return nil
+}
+
+// checkStashContent verifies that:
+//  1. Every file in the stash is in targetSet (no unexpected files captured).
+//  2. Every file in targetSet is in the stash (nothing silently dropped).
+//
+// Uses stash@{0} — the stash just created. currentStaged/currentUnstaged are
+// passed from the already-computed porcelain map to avoid redundant git calls.
+func checkStashContent(targetSet map[string]bool, currentStaged, currentUnstaged map[string]bool) error {
+	detail, err := getStashDetail("stash@{0}", currentStaged, currentUnstaged)
+	if err != nil {
+		return nil // can't inspect stash — don't block, stash already succeeded
+	}
+
+	stashedSet := make(map[string]bool, len(detail.Files))
+	for _, f := range detail.Files {
+		stashedSet[f.Path] = true
+	}
+
+	// Check 1: stash contains only files we intended.
+	for path := range stashedSet {
+		if !targetSet[path] {
+			return fmt.Errorf("stash captured unexpected file %q — only %v were selected", path, sortedKeys(targetSet))
+		}
+	}
+
+	// Check 2: every intended file is actually in the stash.
+	for path := range targetSet {
+		if !stashedSet[path] {
+			return fmt.Errorf("file %q was selected but is missing from stash", path)
+		}
+	}
+
+	return nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // StashPush creates a stash with the given message and options.
 // stashType: "staged", "unstaged", "all", "custom"
 // customFiles: used when stashType == "custom"
 func StashPush(msg, stashType string, customFiles []string) error {
 	var args []string
+
+	// Capture porcelain state before the stash for post-verification.
+	// "all" intentionally changes everything so we skip it there.
+	var (
+		before    map[string]string
+		targetSet map[string]bool
+	)
+	if stashType != "all" {
+		before, _ = porcelainStatus()
+		targetSet = make(map[string]bool)
+	}
+
 	switch stashType {
 	case "staged":
+		// Build target set: all currently staged files.
+		for path, code := range before {
+			if len(code) >= 1 && code[0] != ' ' && code[0] != '?' {
+				targetSet[path] = true
+			}
+		}
 		args = []string{"stash", "push", "--staged", "-m", msg}
 	case "unstaged":
-		// Stash only unstaged changes by listing their files explicitly
+		// --keep-index stashes working-tree-only changes while leaving staged
+		// (index) changes intact. This correctly handles MM files where both
+		// staged and unstaged changes exist — the staged portion stays staged.
 		files, err := ListModifiedFiles()
 		if err != nil {
 			return err
 		}
-		var unstaged []string
+		hasUnstaged := false
 		for _, f := range files {
 			if len(f.Code) > 1 && f.Code[1] != ' ' && f.Code != "??" {
-				unstaged = append(unstaged, f.Path)
+				hasUnstaged = true
+				targetSet[f.Path] = true
 			}
 		}
-		if len(unstaged) == 0 {
+		if !hasUnstaged {
 			return fmt.Errorf("no unstaged files to stash")
 		}
-		args = append([]string{"stash", "push", "-m", msg, "--"}, unstaged...)
+		args = []string{"stash", "push", "--keep-index", "-m", msg}
 	case "all":
 		args = []string{"stash", "push", "--include-untracked", "-m", msg}
 	case "custom":
-		// Check if any selected file is untracked
-		status, _ := ListModifiedFiles()
-		untrackedSet := make(map[string]bool)
-		for _, f := range status {
-			if f.IsUntracked() {
-				untrackedSet[f.Path] = true
-			}
+		if len(customFiles) == 0 {
+			return fmt.Errorf("no files selected for custom stash")
 		}
-		hasUntracked := false
-		for _, path := range customFiles {
-			if untrackedSet[path] {
-				hasUntracked = true
-				break
-			}
+		for _, p := range customFiles {
+			targetSet[p] = true
 		}
-		if hasUntracked {
-			args = append([]string{"stash", "push", "--include-untracked", "-m", msg, "--"}, customFiles...)
-		} else {
-			args = append([]string{"stash", "push", "-m", msg, "--"}, customFiles...)
-		}
+		// --include-untracked handles both tracked and untracked files in the
+		// pathspec cleanly, leaving all other staged files intact.
+		args = append([]string{"stash", "push", "--include-untracked", "-m", msg, "--"}, customFiles...)
 	default:
 		args = []string{"stash", "push", "--include-untracked", "-m", msg}
 	}
-	cmd := exec.Command("git", args...)
-	out, err := cmd.CombinedOutput()
+
+	stashCountBefore := stashCount()
+	out, err := exec.Command("git", args...).CombinedOutput()
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
+		// git stash push --staged may create a stash entry before failing (e.g.
+		// on MM files). Drop it so the user's stash list stays clean.
+		if stashCount() > stashCountBefore {
+			exec.Command("git", "stash", "drop").Run() //nolint:errcheck
+		}
+		errMsg := strings.TrimSpace(string(out))
+		if errMsg == "" {
 			return err
 		}
-		return fmt.Errorf("%s", msg)
+		return fmt.Errorf("%s", errMsg)
+	}
+
+	// Post-stash verification (skipped for "all" where everything is expected to change).
+	if before != nil {
+		rollback := func() {
+			exec.Command("git", "stash", "pop", "--index").Run() //nolint:errcheck
+		}
+
+		// 1. Working-tree check: non-target files must be untouched.
+		after, verErr := porcelainStatus()
+		if verErr == nil {
+			if collErr := checkNoCollateral(before, after, targetSet); collErr != nil {
+				rollback()
+				return fmt.Errorf("stash rolled back: %w", collErr)
+			}
+		}
+
+		// Derive staged/unstaged sets from the post-stash porcelain map so
+		// checkStashContent can reuse them without extra git commands.
+		var afterStaged, afterUnstaged map[string]bool
+		if after != nil {
+			afterStaged = make(map[string]bool)
+			afterUnstaged = make(map[string]bool)
+			for path, code := range after {
+				if len(code) >= 1 && code[0] != ' ' && code[0] != '?' {
+					afterStaged[path] = true
+				}
+				if len(code) >= 2 && code[1] != ' ' && code[1] != '?' {
+					afterUnstaged[path] = true
+				}
+			}
+		}
+
+		// 2. Stash content check: stash must contain exactly the target files.
+		if contentErr := checkStashContent(targetSet, afterStaged, afterUnstaged); contentErr != nil {
+			rollback()
+			return fmt.Errorf("stash rolled back: %w", contentErr)
+		}
 	}
 	return nil
 }
+
 
 // StashApply applies a stash without removing it.
 func StashApply(ref string) error {

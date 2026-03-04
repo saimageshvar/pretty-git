@@ -6,22 +6,23 @@ import "github.com/charmbracelet/bubbles/key"
 type createPhase int
 
 const (
-	phaseTypeSelect  createPhase = 0 // Phase 0: choose stash type
-	phaseFileSelect  createPhase = 1 // Phase 1: multi-select files (custom only)
-	phaseMessage     createPhase = 2 // Phase 2: enter message
-	phaseExecuting   createPhase = 3 // Phase 3: running git, show spinner
+	phaseTypeSelect createPhase = 0 // Phase 0: choose type & configure custom files
+	phaseMessage    createPhase = 1 // Phase 1: enter stash message
+	phaseExecuting  createPhase = 2 // Phase 2: running git stash, show spinner
 )
 
 type createKeyMap struct {
-	Up      key.Binding
-	Down    key.Binding
-	Select  key.Binding
-	Toggle  key.Binding
-	All     key.Binding
-	None    key.Binding
-	Confirm key.Binding
-	Back    key.Binding
-	Quit    key.Binding
+	Up         key.Binding
+	Down       key.Binding
+	FocusRight key.Binding
+	FocusLeft  key.Binding
+	Select     key.Binding // enter — advance to message
+	Toggle     key.Binding // space — toggle file checkbox
+	All        key.Binding // a — select all
+	None       key.Binding // n — deselect all
+	Confirm    key.Binding // enter — confirm message
+	Back       key.Binding // esc — back / quit
+	Quit       key.Binding // ctrl+c — quit
 }
 
 func defaultCreateKeyMap() createKeyMap {
@@ -34,9 +35,17 @@ func defaultCreateKeyMap() createKeyMap {
 			key.WithKeys("down", "j"),
 			key.WithHelp("↓/j", "down"),
 		),
+		FocusRight: key.NewBinding(
+			key.WithKeys("right", "l"),
+			key.WithHelp("→", "file pane"),
+		),
+		FocusLeft: key.NewBinding(
+			key.WithKeys("left", "h"),
+			key.WithHelp("←", "type pane"),
+		),
 		Select: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("enter", "select"),
+			key.WithHelp("enter", "next"),
 		),
 		Toggle: key.NewBinding(
 			key.WithKeys(" "),
@@ -52,7 +61,7 @@ func defaultCreateKeyMap() createKeyMap {
 		),
 		Confirm: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("enter", "confirm"),
+			key.WithHelp("enter", "create stash"),
 		),
 		Back: key.NewBinding(
 			key.WithKeys("esc"),
@@ -65,12 +74,16 @@ func defaultCreateKeyMap() createKeyMap {
 	}
 }
 
-func (k createKeyMap) typeSelectHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Select, k.Back}
+func (k createKeyMap) leftPaneHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.FocusRight, k.Select, k.Back}
 }
 
-func (k createKeyMap) fileSelectHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Toggle, k.All, k.None, k.Confirm, k.Back}
+func (k createKeyMap) rightPaneCustomHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.Toggle, k.All, k.None, k.FocusLeft, k.Select}
+}
+
+func (k createKeyMap) rightPanePreviewHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.FocusLeft, k.Select}
 }
 
 func (k createKeyMap) messageHelp() []key.Binding {

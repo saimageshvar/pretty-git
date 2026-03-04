@@ -60,8 +60,10 @@ type BrowseModel struct {
 	detailOffset int
 	loading      bool
 
-	// Drop confirmation
+	// Confirmation modal (drop=warning, pop=accent)
 	confirmingDrop bool
+	confirmingPop  bool
+	confirmFocus   int // 0=No (default, safe), 1=Yes
 
 	// Result message
 	actionErr    error
@@ -198,17 +200,24 @@ func (m BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Drop confirmation dialog
-		if m.confirmingDrop {
+		// Confirmation modal (drop / pop) — navigate with ←/→, confirm with enter
+		if m.confirmingDrop || m.confirmingPop {
 			switch {
-			case key.Matches(msg, m.keys.ConfirmDrop):
-				m.confirmingDrop = false
-				m.actionErr = nil
-				m.loading = true
-				ref := m.stashes[m.cursor].Ref
-				return m, tea.Batch(m.spinner.Tick, doStashAction(ref, m.mode))
-			case key.Matches(msg, m.keys.CancelDrop):
-				m.confirmingDrop = false
+			case key.Matches(msg, m.keys.FocusList): // ← → No
+				m.confirmFocus = 0
+			case key.Matches(msg, m.keys.FocusDetail): // → → Yes
+				m.confirmFocus = 1
+			case key.Matches(msg, m.keys.Action): // enter → activate focused button
+				if m.confirmFocus == 1 {
+					m.confirmingDrop, m.confirmingPop = false, false
+					m.confirmFocus = 0
+					m.actionErr = nil
+					m.loading = true
+					ref := m.stashes[m.cursor].Ref
+					return m, tea.Batch(m.spinner.Tick, doStashAction(ref, m.mode))
+				}
+				m.confirmingDrop, m.confirmingPop = false, false
+				m.confirmFocus = 0
 			}
 			return m, nil
 		}
@@ -253,9 +262,14 @@ func (m BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			m.actionErr = nil
-			if m.mode == BrowseModeDrop {
+			switch m.mode {
+			case BrowseModeDrop:
 				m.confirmingDrop = true
-			} else {
+				m.confirmFocus = 0
+			case BrowseModePop:
+				m.confirmingPop = true
+				m.confirmFocus = 0
+			default:
 				m.loading = true
 				ref := m.stashes[m.cursor].Ref
 				return m, tea.Batch(m.spinner.Tick, doStashAction(ref, m.mode))
@@ -326,10 +340,8 @@ func (m BrowseModel) View() string {
 	// Footer
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
 
-	if m.confirmingDrop {
-		entry := m.stashes[m.cursor]
-		sb.WriteString("  " + ui.StyleWarning.Render(fmt.Sprintf("⚠ Drop %s? ", entry.Ref)))
-		sb.WriteString(m.help.ShortHelpView(m.keys.confirmHelp()))
+	if m.confirmingDrop || m.confirmingPop {
+		sb.WriteString(m.renderConfirmModal())
 	} else if m.actionErr != nil {
 		sb.WriteString("  " + ui.StyleError.Render("✗ "+m.actionErr.Error()))
 	} else if m.focusedPane == browseDetail {
@@ -484,15 +496,12 @@ func buildBrowseDetailLines(d *git.StashDetail, dw int) []string {
 	add := func(s string) { lines = append(lines, s) }
 
 	dimS := func(s string) string { return ui.StyleDim.Render(s) }
-	kwS := func(s string) string {
-		return lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true).Render(s)
-	}
 	valS := func(s string) string {
 		return lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(s)
 	}
 
-	// Stash ref + message
-	add("  " + kwS(d.Ref) + "  " + valS(d.Message))
+	// Message (ref is already shown in the column header)
+	add("  " + valS(d.Message))
 	add("")
 
 	// Metadata
@@ -536,6 +545,58 @@ func buildBrowseDetailLines(d *git.StashDetail, dw int) []string {
 	}
 
 	return lines
+}
+
+// renderConfirmModal renders a centered lipgloss modal for drop/pop confirmation.
+func (m BrowseModel) renderConfirmModal() string {
+	if len(m.stashes) == 0 {
+		return ""
+	}
+	entry := m.stashes[m.cursor]
+	isDrop := m.confirmingDrop
+
+	var accent lipgloss.TerminalColor = ui.ColorAccent
+	titleText := "  Pop Stash"
+	if isDrop {
+		accent = ui.ColorWarning
+		titleText = "⚠  Drop Stash"
+	}
+
+	titleS := lipgloss.NewStyle().Bold(true).Foreground(accent)
+	refS := lipgloss.NewStyle().Foreground(ui.ColorHash).Bold(true)
+	msgS := lipgloss.NewStyle().Foreground(ui.ColorHeader)
+
+	// Buttons — No is on the left (safe default), Yes on the right
+	noStyle := lipgloss.NewStyle().Bold(true).Padding(0, 3)
+	yesStyle := lipgloss.NewStyle().Bold(true).Padding(0, 3)
+	if m.confirmFocus == 0 {
+		noStyle = noStyle.Background(ui.ColorCursorBg).Foreground(accent)
+	} else {
+		yesStyle = yesStyle.Background(accent).Foreground(ui.ColorCursorFg)
+	}
+
+	buttonRow := noStyle.Render("✕  No") + "      " + yesStyle.Render("✓  Yes")
+	hint := ui.StyleDim.Render("← →  navigate   enter  confirm")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		titleS.Render(titleText),
+		"",
+		refS.Render(entry.Ref)+"  "+msgS.Render(truncateStr(entry.Message, 40)),
+		ui.StyleDim.Render("branch: "+truncateStr(entry.Branch, 35)),
+		"",
+		"  "+buttonRow,
+		"",
+		hint,
+	)
+
+	box := lipgloss.NewStyle().
+		BorderStyle(lipgloss.DoubleBorder()).
+		BorderForeground(accent).
+		Padding(1, 3).
+		Width(54).
+		Render(content)
+
+	return "\n" + lipgloss.PlaceHorizontal(m.width, lipgloss.Center, box) + "\n"
 }
 
 // ── Async commands ────────────────────────────────────────────────────────────

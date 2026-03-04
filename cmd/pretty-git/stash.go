@@ -15,14 +15,15 @@ import (
 // runStash is the entry point for `pgit stash [subcommand] [args…]`.
 // Routing:
 //
-//	pgit stash                    → create wizard (interactive)
-//	pgit stash apply              → browse in apply mode
-//	pgit stash pop                → browse in pop mode
-//	pgit stash drop               → browse in drop mode
-//	pgit stash list               → browse in apply mode (alias)
-//	pgit stash "msg"              → quick: stash all + message (no TUI)
-//	pgit stash --staged "msg"     → quick: stash staged only + message
-//	pgit stash --unstaged "msg"   → quick: stash unstaged only + message
+//	pgit stash                         → create wizard (interactive)
+//	pgit stash apply                   → browse in apply mode
+//	pgit stash pop                     → browse in pop mode
+//	pgit stash drop                    → browse in drop mode
+//	pgit stash list                    → browse in apply mode (alias)
+//	pgit stash "msg"                   → quick: stash all + message (no TUI)
+//	pgit stash --staged "msg"          → quick: stash staged only + message
+//	pgit stash --unstaged "msg"        → quick: stash unstaged only + message
+//	pgit stash --custom "msg" -- f1 f2 → quick: stash specified files + message
 func runStash(args []string) {
 	repoName := git.RepoName()
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
@@ -54,13 +55,36 @@ func runStash(args []string) {
 	// Quick stash flags
 	stashType := "all"
 	msgArgs := args
+	var customFiles []string
 
-	if sub == "--staged" {
+	switch sub {
+	case "--staged":
 		stashType = "staged"
 		msgArgs = args[1:]
-	} else if sub == "--unstaged" {
+	case "--unstaged":
 		stashType = "unstaged"
 		msgArgs = args[1:]
+	case "--custom":
+		// pgit stash --custom "msg" -- file1 file2 ...
+		stashType = "custom"
+		rest := args[1:]
+		sep := -1
+		for i, a := range rest {
+			if a == "--" {
+				sep = i
+				break
+			}
+		}
+		if sep < 0 {
+			fmt.Fprintln(os.Stderr, "pgit: --custom requires -- separator: pgit stash --custom \"msg\" -- file1 file2")
+			os.Exit(1)
+		}
+		msgArgs = rest[:sep]
+		customFiles = rest[sep+1:]
+		if len(customFiles) == 0 {
+			fmt.Fprintln(os.Stderr, "pgit: no files specified after --")
+			os.Exit(1)
+		}
 	}
 
 	// Join remaining args as the message
@@ -85,7 +109,7 @@ func runStash(args []string) {
 	shortHash := git.LastCommitShortHash()
 	finalMsg := shortHash + ": " + msg
 
-	if err := git.StashPush(finalMsg, stashType, nil); err != nil {
+	if err := git.StashPush(finalMsg, stashType, customFiles); err != nil {
 		fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
 		os.Exit(1)
 	}

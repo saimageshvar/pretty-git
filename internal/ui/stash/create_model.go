@@ -31,31 +31,31 @@ type stashDoneMsg struct {
 // paneRows is the fixed visible height for scrollable panes in the create wizard.
 const paneRows = 10
 
-// CreateModel is the Bubble Tea model for the 3-phase stash creation wizard.
+// CreateModel is the Bubble Tea model for the stash creation wizard.
 type CreateModel struct {
 	phase createPhase
 
-	// Phase 0 — type selector
-	files         []git.FileStatus
-	typeCursor    int
-	stagedCount   int
-	unstagedCount int
-	allCount      int
-	previewOffset int // scroll offset for right-pane file preview
+	// Type selector (left pane)
+	files          []git.FileStatus
+	typeCursor     int
+	stagedCount    int
+	unstagedCount  int
+	allCount       int
+	rightPaneFocus bool // true when right pane (file list / preview) has focus
 
-	// Phase 1 — file multi-select
+	// Right pane — file list (custom) or preview scroll (other types)
 	fileCursor   int
-	fileOffset   int // scroll offset for file list
+	fileOffset   int
 	fileSelected []bool
 
-	// Phase 2 — message input
-	stashType  int // resolved stashType constant
+	// Message phase
+	stashType  int
 	msgInput   textinput.Model
 	defaultMsg string
 
-	// Phase 3 — executing
+	// Executing phase
 	spinner spinner.Model
-	result  string // success message shown after quit
+	result  string
 	execErr error
 
 	width    int
@@ -137,6 +137,9 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 		startCursor = 0
 	}
 
+	// Custom mode starts with nothing selected — user must explicitly pick files.
+	allSelected := make([]bool, len(files))
+
 	return CreateModel{
 		phase:         phaseTypeSelect,
 		files:         files,
@@ -144,7 +147,7 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 		stagedCount:   staged,
 		unstagedCount: unstaged,
 		allCount:      all,
-		fileSelected:  make([]bool, len(files)),
+		fileSelected:  allSelected,
 		msgInput:      ti,
 		defaultMsg:    git.LastCommitOneLiner(),
 		spinner:       sp,
@@ -192,8 +195,6 @@ func (m CreateModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.phase {
 		case phaseTypeSelect:
 			return m.updateTypeSelect(msg)
-		case phaseFileSelect:
-			return m.updateFileSelect(msg)
 		case phaseMessage:
 			return m.updateMessage(msg)
 		}
@@ -203,6 +204,13 @@ func (m CreateModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m CreateModel) updateTypeSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.rightPaneFocus {
+		return m.updateRightPane(msg)
+	}
+	return m.updateLeftPane(msg)
+}
+
+func (m CreateModel) updateLeftPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	opts := m.typeOptions()
 	prev := m.typeCursor
 	switch {
@@ -225,29 +233,37 @@ func (m CreateModel) updateTypeSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case key.Matches(msg, m.keys.FocusRight):
+		m.rightPaneFocus = true
+		m.fileCursor = 0
+		m.fileOffset = 0
+
 	case key.Matches(msg, m.keys.Select):
-		m.stashType = m.typeCursor
 		if m.typeCursor == stashTypeCustom {
-			m.phase = phaseFileSelect
-			for i := range m.fileSelected {
-				m.fileSelected[i] = true
-			}
+			// Force user into the file picker — never skip it for custom.
+			m.rightPaneFocus = true
+			m.fileCursor = 0
+			m.fileOffset = 0
 		} else {
+			m.stashType = m.typeCursor
 			m.phase = phaseMessage
 		}
 	}
 
-	// Reset preview scroll when type changes
+	// Reset scroll when type changes
 	if m.typeCursor != prev {
-		m.previewOffset = 0
+		m.fileCursor = 0
+		m.fileOffset = 0
 	}
 	return m, nil
 }
 
-func (m CreateModel) updateFileSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m CreateModel) updateRightPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	isCustom := m.typeCursor == stashTypeCustom
+
 	switch {
-	case key.Matches(msg, m.keys.Back):
-		m.phase = phaseTypeSelect
+	case key.Matches(msg, m.keys.Back), key.Matches(msg, m.keys.FocusLeft):
+		m.rightPaneFocus = false
 
 	case key.Matches(msg, m.keys.Up):
 		if m.fileCursor > 0 {
@@ -256,35 +272,47 @@ func (m CreateModel) updateFileSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, m.keys.Down):
-		if m.fileCursor < len(m.files)-1 {
+		files := m.filesForType(m.typeCursor)
+		if m.fileCursor < len(files)-1 {
 			m.fileCursor++
 			m.clampFileScroll()
 		}
 
 	case key.Matches(msg, m.keys.Toggle):
-		if m.fileCursor < len(m.fileSelected) {
+		if isCustom && m.fileCursor < len(m.fileSelected) {
 			m.fileSelected[m.fileCursor] = !m.fileSelected[m.fileCursor]
 		}
 
 	case key.Matches(msg, m.keys.All):
-		for i := range m.fileSelected {
-			m.fileSelected[i] = true
+		if isCustom {
+			for i := range m.fileSelected {
+				m.fileSelected[i] = true
+			}
 		}
 
 	case key.Matches(msg, m.keys.None):
-		for i := range m.fileSelected {
-			m.fileSelected[i] = false
-		}
-
-	case key.Matches(msg, m.keys.Confirm):
-		count := 0
-		for _, sel := range m.fileSelected {
-			if sel {
-				count++
+		if isCustom {
+			for i := range m.fileSelected {
+				m.fileSelected[i] = false
 			}
 		}
-		if count > 0 {
+
+	case key.Matches(msg, m.keys.Select):
+		m.stashType = m.typeCursor
+		if isCustom {
+			count := 0
+			for _, sel := range m.fileSelected {
+				if sel {
+					count++
+				}
+			}
+			if count > 0 {
+				m.phase = phaseMessage
+				m.rightPaneFocus = false
+			}
+		} else {
 			m.phase = phaseMessage
+			m.rightPaneFocus = false
 		}
 	}
 
@@ -292,11 +320,12 @@ func (m CreateModel) updateFileSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *CreateModel) clampFileScroll() {
+	rows := paneRows - 4 // matches fileRowsAvail in viewTypeSelect
 	if m.fileCursor < m.fileOffset {
 		m.fileOffset = m.fileCursor
 	}
-	if m.fileCursor >= m.fileOffset+paneRows {
-		m.fileOffset = m.fileCursor - paneRows + 1
+	if m.fileCursor >= m.fileOffset+rows {
+		m.fileOffset = m.fileCursor - rows + 1
 	}
 }
 
@@ -304,11 +333,8 @@ func (m CreateModel) updateMessage(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Back):
 		m.execErr = nil
-		if m.stashType == stashTypeCustom {
-			m.phase = phaseFileSelect
-		} else {
-			m.phase = phaseTypeSelect
-		}
+		m.phase = phaseTypeSelect
+		m.rightPaneFocus = false
 
 	case key.Matches(msg, m.keys.Confirm):
 		m.phase = phaseExecuting
@@ -368,8 +394,6 @@ func (m CreateModel) View() string {
 	// Header
 	sb.WriteString(ui.StyleHeader.Render("  ✦ Stash") + "  " + ui.StyleAccent.Render(m.repoName))
 	switch m.phase {
-	case phaseFileSelect:
-		sb.WriteString("  " + ui.StyleDim.Render("select files"))
 	case phaseMessage:
 		sb.WriteString("  " + ui.StyleDim.Render("stash message"))
 	case phaseExecuting:
@@ -381,8 +405,6 @@ func (m CreateModel) View() string {
 	switch m.phase {
 	case phaseTypeSelect:
 		sb.WriteString(m.viewTypeSelect())
-	case phaseFileSelect:
-		sb.WriteString(m.viewFileSelect())
 	case phaseMessage:
 		sb.WriteString(m.viewMessage())
 	case phaseExecuting:
@@ -394,9 +416,15 @@ func (m CreateModel) View() string {
 	// Footer help
 	switch m.phase {
 	case phaseTypeSelect:
-		sb.WriteString("  " + m.help.ShortHelpView(m.keys.typeSelectHelp()))
-	case phaseFileSelect:
-		sb.WriteString("  " + m.help.ShortHelpView(m.keys.fileSelectHelp()))
+		if m.rightPaneFocus {
+			if m.typeCursor == stashTypeCustom {
+				sb.WriteString("  " + m.help.ShortHelpView(m.keys.rightPaneCustomHelp()))
+			} else {
+				sb.WriteString("  " + m.help.ShortHelpView(m.keys.rightPanePreviewHelp()))
+			}
+		} else {
+			sb.WriteString("  " + m.help.ShortHelpView(m.keys.leftPaneHelp()))
+		}
 	case phaseMessage:
 		sb.WriteString("  " + m.help.ShortHelpView(m.keys.messageHelp()))
 	}
@@ -479,62 +507,154 @@ func (m CreateModel) viewTypeSelect() string {
 	}
 	leftRows = append(leftRows, strings.Repeat(" ", lw)) // trailing blank
 
-	// Build right-pane: fixed paneRows height with scroll
-	previewFiles := m.filesForType(m.typeCursor)
-	// 3 header lines (blank + title + rule), rest is file rows
-	fileRowsAvail := paneRows - 3
+	// Build right-pane: fixed paneRows height with scroll indicator at bottom
+	// 4 header/footer lines (blank + title + rule + scroll), rest is file rows
+	fileRowsAvail := paneRows - 4
 	if fileRowsAvail < 1 {
 		fileRowsAvail = 1
 	}
 
-	// Build full list of file lines first, then window
-	var allFileLines []string
-	if len(previewFiles) == 0 {
-		allFileLines = append(allFileLines, ui.StyleDim.Render("  (none)"))
-	} else {
-		for _, f := range previewFiles {
-			status := statusColor(f.StatusDisplay())
-			path := ui.StyleDim.Render(truncateCreateStr(f.Path, dw-6))
-			allFileLines = append(allFileLines, "  "+status+"  "+path)
-		}
-	}
-
-	// Clamp previewOffset
-	maxOff := len(allFileLines) - fileRowsAvail
-	if maxOff < 0 {
-		maxOff = 0
-	}
-	offset := m.previewOffset
-	if offset > maxOff {
-		offset = maxOff
-	}
-
-	previewTitle := "  files to stash"
-	if m.typeCursor == stashTypeCustom {
-		previewTitle = "  all changed files"
-	}
-	scrollHint := ""
-	below := len(allFileLines) - offset - fileRowsAvail
-	if below > 0 {
-		scrollHint = ui.StyleDim.Render(fmt.Sprintf("  ↓%d", below))
-	}
-	above := offset
-	if above > 0 {
-		scrollHint = ui.StyleDim.Render(fmt.Sprintf("  ↑%d", above)) + scrollHint
+	// Divider color: accent when right pane focused, dim otherwise
+	dividerColor := ui.ColorDivider
+	if m.rightPaneFocus {
+		dividerColor = ui.ColorAccent
 	}
 
 	var rightLines []string
-	rightLines = append(rightLines, strings.Repeat(" ", lw)) // blank row aligns with left pane's first blank
-	rightLines = append(rightLines, lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(previewTitle)+scrollHint)
-	rightLines = append(rightLines, ui.StyleDim.Render(strings.Repeat("─", dw-2)))
+	rightLines = append(rightLines, "") // blank row aligns with left pane's first blank
 
-	end := offset + fileRowsAvail
-	if end > len(allFileLines) {
-		end = len(allFileLines)
+	if m.typeCursor == stashTypeCustom {
+		// Custom mode: show interactive checkbox list in right pane
+		selectedCount := 0
+		for _, sel := range m.fileSelected {
+			if sel {
+				selectedCount++
+			}
+		}
+
+		totalFiles := len(m.files)
+		titleCount := ui.StyleCountBadge.Render(fmt.Sprintf("%d total  %d selected", totalFiles, selectedCount))
+		titleStyle := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true)
+		rightLines = append(rightLines, titleStyle.Render("  custom files")+"  "+titleCount)
+		rightLines = append(rightLines, ui.StyleDim.Render(strings.Repeat("─", dw-2)))
+
+		above := m.fileOffset
+		below := len(m.files) - m.fileOffset - fileRowsAvail
+		if below < 0 {
+			below = 0
+		}
+
+		end := m.fileOffset + fileRowsAvail
+		if end > len(m.files) {
+			end = len(m.files)
+		}
+		for i := m.fileOffset; i < end; i++ {
+			f := m.files[i]
+			isCursor := m.rightPaneFocus && i == m.fileCursor
+			isSelected := i < len(m.fileSelected) && m.fileSelected[i]
+			checkTxt := "[ ]"
+			if isSelected {
+				checkTxt = "[✓]"
+			}
+
+			var line string
+			if isCursor {
+				bg := ui.ColorCursorBg
+				checkS  := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorAccent).Bold(true).Render(checkTxt)
+				spaceS  := lipgloss.NewStyle().Background(bg).Render(" ")
+				statusS := lipgloss.NewStyle().Background(bg).Foreground(statusFg(f.StatusDisplay())).Bold(true).Render(f.StatusDisplay())
+				pathS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorCursorFg).Bold(true).Render(truncateCreateStr(f.Path, dw-9))
+				line = "  " + checkS + spaceS + statusS + spaceS + pathS
+				used := lipgloss.Width(line)
+				if dw > used {
+					line += lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", dw-used))
+				}
+			} else {
+				checkS := ui.StyleDim.Render(checkTxt)
+				if isSelected {
+					checkS = lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(checkTxt)
+				}
+				line = "  " + checkS + " " + statusColor(f.StatusDisplay()) + " " + ui.StyleDim.Render(truncateCreateStr(f.Path, dw-9))
+			}
+			rightLines = append(rightLines, line)
+		}
+
+		// Scroll footer
+		hintStyle := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true)
+		var scrollFooter string
+		switch {
+		case above > 0 && below > 0:
+			scrollFooter = hintStyle.Render(fmt.Sprintf("  ↑%d above · ↓%d more files", above, below))
+		case below > 0:
+			scrollFooter = hintStyle.Render(fmt.Sprintf("  ↓ %d more files", below))
+		case above > 0:
+			scrollFooter = hintStyle.Render(fmt.Sprintf("  ↑ %d files above", above))
+		}
+		rightLines = append(rightLines, scrollFooter)
+	} else {
+		// Preview mode: file list with cursor highlight for focused right pane
+		previewFiles := m.filesForType(m.typeCursor)
+		totalFiles := len(previewFiles)
+		titleCount := ui.StyleCountBadge.Render(fmt.Sprintf("%d total", totalFiles))
+		rightLines = append(rightLines, lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("  files to stash")+"  "+titleCount)
+		rightLines = append(rightLines, ui.StyleDim.Render(strings.Repeat("─", dw-2)))
+
+		if len(previewFiles) == 0 {
+			rightLines = append(rightLines, ui.StyleDim.Render("  (none)"))
+		} else {
+			// Clamp fileOffset
+			maxOff := len(previewFiles) - fileRowsAvail
+			if maxOff < 0 {
+				maxOff = 0
+			}
+			offset := m.fileOffset
+			if offset > maxOff {
+				offset = maxOff
+			}
+
+			end := offset + fileRowsAvail
+			if end > len(previewFiles) {
+				end = len(previewFiles)
+			}
+			for i := offset; i < end; i++ {
+				f := previewFiles[i]
+				isCursor := m.rightPaneFocus && i == m.fileCursor
+				if isCursor {
+					bg := ui.ColorCursorBg
+					statusS := lipgloss.NewStyle().Background(bg).Foreground(statusFg(f.StatusDisplay())).Bold(true).Render(f.StatusDisplay())
+					spaceS  := lipgloss.NewStyle().Background(bg).Render("  ")
+					pathS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorCursorFg).Bold(true).Render(truncateCreateStr(f.Path, dw-6))
+					line := "  " + statusS + spaceS + pathS
+					used := lipgloss.Width(line)
+					if dw > used {
+						line += lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", dw-used))
+					}
+					rightLines = append(rightLines, line)
+				} else {
+					rightLines = append(rightLines, "  "+statusColor(f.StatusDisplay())+"  "+ui.StyleDim.Render(truncateCreateStr(f.Path, dw-6)))
+				}
+			}
+
+			// Scroll footer
+			above := m.fileOffset
+			below := len(previewFiles) - m.fileOffset - fileRowsAvail
+			if below < 0 {
+				below = 0
+			}
+			hintStyle := lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true)
+			var scrollFooter string
+			switch {
+			case above > 0 && below > 0:
+				scrollFooter = hintStyle.Render(fmt.Sprintf("  ↑%d above · ↓%d more files", above, below))
+			case below > 0:
+				scrollFooter = hintStyle.Render(fmt.Sprintf("  ↓ %d more files", below))
+			case above > 0:
+				scrollFooter = hintStyle.Render(fmt.Sprintf("  ↑ %d files above", above))
+			}
+			rightLines = append(rightLines, scrollFooter)
+		}
 	}
-	for _, line := range allFileLines[offset:end] {
-		rightLines = append(rightLines, line)
-	}
+
 	// Pad right pane to exactly paneRows
 	for len(rightLines) < paneRows {
 		rightLines = append(rightLines, "")
@@ -546,7 +666,7 @@ func (m CreateModel) viewTypeSelect() string {
 	}
 
 	// Merge left + divider + right (exactly paneRows rows)
-	divider := lipgloss.NewStyle().Foreground(ui.ColorDivider).Render("│")
+	divider := lipgloss.NewStyle().Foreground(dividerColor).Render("│")
 	var sb strings.Builder
 	for i := 0; i < paneRows; i++ {
 		left := leftRows[i]
@@ -563,86 +683,6 @@ func (m CreateModel) viewTypeSelect() string {
 	return sb.String()
 }
 
-func (m CreateModel) viewFileSelect() string {
-	var sb strings.Builder
-
-	selectedCount := 0
-	for _, sel := range m.fileSelected {
-		if sel {
-			selectedCount++
-		}
-	}
-
-	// Scroll indicators
-	above := m.fileOffset
-	below := len(m.files) - m.fileOffset - paneRows
-	if below < 0 {
-		below = 0
-	}
-
-	// Header row with scroll hint
-	hint := ""
-	if above > 0 {
-		hint += ui.StyleDim.Render(fmt.Sprintf(" ↑%d", above))
-	}
-	if below > 0 {
-		hint += ui.StyleDim.Render(fmt.Sprintf(" ↓%d", below))
-	}
-	sb.WriteString("\n  " + ui.StyleDim.Render(fmt.Sprintf("%d files", len(m.files))) + hint + "\n\n")
-
-	// Windowed file list
-	end := m.fileOffset + paneRows
-	if end > len(m.files) {
-		end = len(m.files)
-	}
-	for i := m.fileOffset; i < end; i++ {
-		f := m.files[i]
-		isCursor := i == m.fileCursor
-		isSelected := i < len(m.fileSelected) && m.fileSelected[i]
-
-		var line string
-		if isCursor {
-			bg := ui.ColorCursorBg
-			cursorS  := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorAccent).Bold(true).Render("» ")
-			checkTxt := "[ ]"
-			if isSelected {
-				checkTxt = "[✓]"
-			}
-			checkS  := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorAccent).Bold(true).Render(checkTxt)
-			spaceS  := lipgloss.NewStyle().Background(bg).Render("  ")
-			statusS := lipgloss.NewStyle().Background(bg).Foreground(statusFg(f.StatusDisplay())).Bold(true).Render(f.StatusDisplay())
-			pathS   := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorCursorFg).Bold(true).Render(f.Path)
-			line = cursorS + checkS + spaceS + statusS + spaceS + pathS
-			used := lipgloss.Width(line)
-			if m.width > used {
-				line += lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", m.width-used))
-			}
-		} else {
-			checkTxt := "[ ]"
-			if isSelected {
-				checkTxt = "[✓]"
-			}
-			checkS := ui.StyleDim.Render(checkTxt)
-			if isSelected {
-				checkS = lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render(checkTxt)
-			}
-			line = "  " + checkS + "  " + statusColor(f.StatusDisplay()) + "  " + f.Path
-		}
-		sb.WriteString(line + "\n")
-	}
-
-	// Pad to fixed height
-	rendered := end - m.fileOffset
-	for rendered < paneRows {
-		sb.WriteString("\n")
-		rendered++
-	}
-
-	sb.WriteString("\n  ")
-	sb.WriteString(ui.StyleCountBadge.Render(fmt.Sprintf("%d selected", selectedCount)))
-	sb.WriteString("\n")
-	return sb.String()
-}
 
 func (m CreateModel) viewMessage() string {
 	var sb strings.Builder
