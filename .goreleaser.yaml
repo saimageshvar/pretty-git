@@ -32,9 +32,9 @@ archives:
 nfpms:
   - id: pgit-deb
     package_name: pgit
-    vendor: sai
-    homepage: https://github.com/sai/pretty-git
-    maintainer: sai
+    vendor: saimageshvar
+    homepage: https://github.com/saimageshvar/pretty-git
+    maintainer: saimageshvar
     description: Prettifies git command output with aesthetic, information-dense TUI views.
     license: MIT
     formats:

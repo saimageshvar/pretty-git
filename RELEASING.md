@@ -21,6 +21,12 @@
    curl -sSL https://raw.githubusercontent.com/saimageshvar/pretty-git/main/install.sh | sudo bash
    ```
 
+## Update notifications
+
+- `pgit` now checks for updates once every 24 hours when users run commands.
+- If a newer GitHub release exists, users are prompted: `Update now? [Y/n]`.
+- Set `PGIT_NO_UPDATE_CHECK=1` to disable this behavior.
+
 ## Version naming
 
 Follow [semver](https://semver.org): `vMAJOR.MINOR.PATCH`
