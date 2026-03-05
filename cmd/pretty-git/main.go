@@ -1,8 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+
+	"github.com/sai/pretty-git/internal/update"
+)
+
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 func main() {
@@ -16,13 +25,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	runWithUpdate := func(command string, run func()) {
+		update.MaybeNotifyAndUpdate(context.Background(), command, version)
+		run()
+	}
+
 	switch os.Args[1] {
 	case "branch":
-		runBranch()
+		runWithUpdate("branch", runBranch)
 	case "checkout":
-		runCheckout(os.Args[2:])
+		runWithUpdate("checkout", func() { runCheckout(os.Args[2:]) })
 	case "log":
-		runLog()
+		runWithUpdate("log", runLog)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
