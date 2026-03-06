@@ -16,17 +16,6 @@ After installation, verify it works:
 ```bash
 pgit --version
 ```
-
----
-
-## Ubuntu — .deb package
-
-Download the `.deb` from the [Releases](https://github.com/saimageshvar/pretty-git/releases) page and install with `dpkg`:
-
-```bash
-sudo dpkg -i pgit_<version>_linux_amd64.deb
-```
-
 ---
 
 ## Manual — download binary
@@ -62,9 +51,6 @@ Re-run the installer to get the latest version — it replaces the existing bina
 ```bash
 curl -sSL https://raw.githubusercontent.com/saimageshvar/pretty-git/main/install.sh | sudo bash
 ```
-
-If you installed from a `.deb`, download and install the newer package the same way.
-
 ---
 
 ## Uninstalling
