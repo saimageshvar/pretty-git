@@ -55,24 +55,37 @@ PS1='$(pgit prompt --shell bash --newline)'
 
 ## Options
 
-| Flag | What it does |
-|------|-------------|
-| `--shell bash` | Required for bash. Makes colours work without breaking line wrapping. |
-| `--max-desc 32` | How many characters of the description to show. Default is 32. Set to `0` to hide the description. |
-| `--newline` | Two-line layout — git info above, cursor below. |
-| `--arrow ❯` | Change the arrow on the second line. Only used with `--newline`. |
-| `--no-color` | Plain text, no colour. |
+| Flag | Default | What it does |
+|------|---------|-------------|
+| `--shell bash` | — | Required for bash. Makes colours work without breaking line wrapping. |
+| `--max-desc N` | `32` | Characters of the description to show. Set to `0` to hide it entirely. |
+| `--newline` | off | Two-line layout — git info above, cursor below. |
+| `--arrow CHAR` | `❯` | Change the arrow. Only used with `--newline`. |
+| `--no-color` | off | Plain text output, no colour. |
 
 ---
 
 ## How to set a branch description
 
 When creating a branch:
+```bash
+pgit checkout -b feature/auth -d "add OAuth login flow"
 ```
+
+Or open the interactive wizard and fill in the description field:
+```bash
 pgit checkout -b
 ```
 
 Or edit an existing branch's description from the branch browser:
 ```
-pgit branch   →  navigate to branch  →  press e
+pgit branch  →  navigate to branch  →  Ctrl+E
 ```
+
+Descriptions are stored in your local `.git/config` and are never pushed to the remote.
+
+---
+
+## Full flag reference
+
+See [docs/commands.md — pgit prompt](commands.md#pgit-prompt).
