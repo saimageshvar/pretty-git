@@ -73,8 +73,8 @@ func defaultBrowseKeyMap() browseKeyMap {
 			key.WithHelp("n/esc", "cancel"),
 		),
 		Quit: key.NewBinding(
-			key.WithKeys("q", "ctrl+c"),
-			key.WithHelp("q", "quit"),
+			key.WithKeys("q", "esc", "ctrl+c"),
+			key.WithHelp("q/esc", "quit"),
 		),
 	}
 }

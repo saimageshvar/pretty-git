@@ -196,13 +196,13 @@ func (m BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.Quit) {
-			return m, tea.Quit
-		}
-
-		// Confirmation modal (drop / pop) — navigate with ←/→, confirm with enter
+		// Confirmation modal (drop / pop) — handled BEFORE general quit so that
+		// esc cancels the dialog rather than quitting the whole program.
 		if m.confirmingDrop || m.confirmingPop {
 			switch {
+			case key.Matches(msg, m.keys.CancelDrop): // n/esc → cancel
+				m.confirmingDrop, m.confirmingPop = false, false
+				m.confirmFocus = 0
 			case key.Matches(msg, m.keys.FocusList): // ← → No
 				m.confirmFocus = 0
 			case key.Matches(msg, m.keys.FocusDetail): // → → Yes
@@ -220,6 +220,10 @@ func (m BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmFocus = 0
 			}
 			return m, nil
+		}
+
+		if key.Matches(msg, m.keys.Quit) {
+			return m, tea.Quit
 		}
 
 		if m.focusedPane == browseDetail {

@@ -183,10 +183,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ── Filter bar has focus ───────────────────────────────────────────
 		if m.focusedPane == paneFilters {
 			switch {
+			case key.Matches(msg, m.keys.FilterExit):
+				// esc/f/enter: exit filter bar back to list (esc does NOT quit from here)
+				m.focusedPane = paneList
 			case key.Matches(msg, m.keys.Quit):
 				return m, tea.Quit
-			case key.Matches(msg, m.keys.FilterExit):
-				m.focusedPane = paneList
 			case key.Matches(msg, m.keys.FilterLeft):
 				if m.filterCursor > 0 {
 					m.filterCursor--
