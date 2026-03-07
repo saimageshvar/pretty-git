@@ -9,6 +9,7 @@ const (
 	paneList    pane = 0
 	paneDetail  pane = 1
 	paneFilters pane = 2
+	paneSearch  pane = 3
 )
 
 type keyMap struct {
@@ -22,12 +23,16 @@ type keyMap struct {
 	FocusDetail  key.Binding // → enter detail pane
 	FocusList    key.Binding // ← return to list pane
 	FocusFilters key.Binding // f  enter filter bar
+	SearchOpen   key.Binding // / open search input
 
 	// Filter bar navigation (active when paneFilters focused)
 	FilterLeft   key.Binding // ← move cursor left
 	FilterRight  key.Binding // → move cursor right
 	FilterToggle key.Binding // space toggle focused checkbox
 	FilterExit   key.Binding // esc/f exit filter bar
+
+	// Search input (active when paneSearch focused)
+	SearchExit key.Binding // esc exit search input
 
 	Quit key.Binding
 }
@@ -62,6 +67,10 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("f"),
 			key.WithHelp("f", "filters"),
 		),
+		SearchOpen: key.NewBinding(
+			key.WithKeys("/"),
+			key.WithHelp("/", "search"),
+		),
 		FilterLeft: key.NewBinding(
 			key.WithKeys("left", "h"),
 			key.WithHelp("←/→", "move"),
@@ -77,6 +86,10 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("esc", "f", "enter"),
 			key.WithHelp("esc", "done"),
 		),
+		SearchExit: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "done"),
+		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "esc", "ctrl+c"),
 			key.WithHelp("q/esc", "quit"),
@@ -86,7 +99,7 @@ func defaultKeyMap() keyMap {
 
 // listHelp is shown when the list pane is focused.
 func (k keyMap) listHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.FocusDetail, k.FocusFilters, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.FocusDetail, k.FocusFilters, k.SearchOpen, k.Quit}
 }
 
 // detailHelp is shown when the detail pane is focused.
@@ -97,6 +110,11 @@ func (k keyMap) detailHelp() []key.Binding {
 // filterHelp is shown when the filter bar is focused.
 func (k keyMap) filterHelp() []key.Binding {
 	return []key.Binding{k.FilterLeft, k.FilterToggle, k.FilterExit, k.Quit}
+}
+
+// searchHelp is shown when the search input is focused.
+func (k keyMap) searchHelp() []key.Binding {
+	return []key.Binding{k.SearchExit}
 }
 
 func (k keyMap) ShortHelp() []key.Binding        { return k.listHelp() }

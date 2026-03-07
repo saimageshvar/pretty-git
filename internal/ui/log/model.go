@@ -3,10 +3,12 @@ package log
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -39,6 +41,8 @@ type commitsReloadedMsg struct {
 	generation int
 }
 
+type debouncedSearchMsg struct{ generation int }
+
 // ── Model ───────────────────────────────────────────────────────────────────
 
 type Model struct {
@@ -68,6 +72,11 @@ type Model struct {
 	listLoading      bool // true while re-fetching after a filter change
 	filterGeneration int  // incremented each filter toggle to drop stale results
 
+	// Search
+	searchInput      textinput.Model
+	searchText       string // last applied grep pattern
+	searchGeneration int    // incremented on each keystroke for debounce
+
 	help    help.Model
 	keys    keyMap
 	spinner spinner.Model
@@ -92,6 +101,15 @@ func New(commits []git.Commit, repoName, ref string, termWidth, termHeight int) 
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Bold(true).Foreground(ui.ColorAccent)
 
+	si := textinput.New()
+	si.Placeholder = "search commits…"
+	si.CharLimit = 150
+	si.Width = termWidth / 2
+	si.Prompt = "  / "
+	si.PromptStyle = lipgloss.NewStyle().Foreground(ui.ColorKeyHint).Bold(true)
+	si.TextStyle = lipgloss.NewStyle().Foreground(ui.ColorHeader)
+	si.PlaceholderStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
+
 	m := Model{
 		commits:     commits,
 		visibleRows: vis,
@@ -103,6 +121,7 @@ func New(commits []git.Commit, repoName, ref string, termWidth, termHeight int) 
 		help:        h,
 		keys:        defaultKeyMap(),
 		spinner:     sp,
+		searchInput: si,
 	}
 	// Pre-set detailHash so the first load's response is accepted immediately.
 	if len(commits) > 0 {
@@ -114,9 +133,9 @@ func New(commits []git.Commit, repoName, ref string, termWidth, termHeight int) 
 
 func (m Model) Init() tea.Cmd {
 	if len(m.commits) > 0 {
-		return tea.Batch(m.spinner.Tick, doLoadDetail(m.commits[0].Hash))
+		return tea.Batch(m.spinner.Tick, doLoadDetail(m.commits[0].Hash), textinput.Blink)
 	}
-	return m.spinner.Tick
+	return tea.Batch(m.spinner.Tick, textinput.Blink)
 }
 
 // ── Update ──────────────────────────────────────────────────────────────────
@@ -133,6 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.help.Width = msg.Width
+		m.searchInput.Width = msg.Width/2 - 6
 		vis := min(len(m.commits), maxVisible)
 		if msg.Height > 5 && vis > msg.Height-5 {
 			vis = msg.Height - 5
@@ -179,7 +199,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case debouncedSearchMsg:
+		if msg.generation != m.searchGeneration {
+			return m, nil // superseded by a newer keystroke
+		}
+		m.searchText = m.searchInput.Value()
+		m.filterGeneration++
+		return m, doFetchCommits(m.ref, m.currentFilters(), m.filterGeneration)
+
 	case tea.KeyMsg:
+		// ── Search input has focus ─────────────────────────────────────────
+		if m.focusedPane == paneSearch {
+			if key.Matches(msg, m.keys.SearchExit) {
+				// esc: leave search pane; keep current searchText applied
+				m.searchInput.Blur()
+				m.focusedPane = paneList
+				return m, nil
+			}
+			prevVal := m.searchInput.Value()
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			if m.searchInput.Value() != prevVal {
+				// Value changed: show spinner immediately, schedule debounced fetch
+				m.searchGeneration++
+				m.listLoading = true
+				gen := m.searchGeneration
+				return m, tea.Batch(cmd, m.spinner.Tick, doDebounceSearch(gen))
+			}
+			return m, cmd
+		}
+
 		// ── Filter bar has focus ───────────────────────────────────────────
 		if m.focusedPane == paneFilters {
 			switch {
@@ -239,6 +288,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
+		case key.Matches(msg, m.keys.SearchOpen):
+			m.focusedPane = paneSearch
+			m.searchInput.Focus()
+			return m, textinput.Blink
 		case key.Matches(msg, m.keys.FocusFilters):
 			m.focusedPane = paneFilters
 		case key.Matches(msg, m.keys.FocusDetail):
@@ -288,11 +341,18 @@ func (m *Model) triggerLoad() tea.Cmd {
 }
 
 func (m Model) currentFilters() git.CommitFilters {
-	f := git.CommitFilters{SkipMerges: m.filterSkipMerges}
+	f := git.CommitFilters{SkipMerges: m.filterSkipMerges, GrepPattern: m.searchText}
 	if m.filterOnlyMine {
 		f.OnlyAuthorEmail = m.userEmail
 	}
 	return f
+}
+
+func doDebounceSearch(gen int) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(250 * time.Millisecond)
+		return debouncedSearchMsg{generation: gen}
+	}
 }
 
 func doFetchCommits(ref string, filters git.CommitFilters, gen int) tea.Cmd {
@@ -333,6 +393,9 @@ func (m Model) View() string {
 		ui.StyleAccent.Render(m.repoName) + "  " + badge + "\n")
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", m.width)) + "\n")
 
+	// ── Search bar ──────────────────────────────────────────────────────────
+	sb.WriteString(m.renderSearchBar() + "\n")
+
 	// ── Filter bar ──────────────────────────────────────────────────────────
 	sb.WriteString(m.renderFilterBar() + "\n")
 
@@ -349,11 +412,35 @@ func (m Model) View() string {
 		sb.WriteString("  " + m.help.ShortHelpView(m.keys.filterHelp()))
 	case paneDetail:
 		sb.WriteString("  " + m.help.ShortHelpView(m.keys.detailHelp()))
+	case paneSearch:
+		sb.WriteString("  " + m.help.ShortHelpView(m.keys.searchHelp()))
 	default:
 		sb.WriteString("  " + m.help.ShortHelpView(m.keys.listHelp()))
 	}
 
 	return sb.String()
+}
+
+// renderSearchBar renders the text search input row.
+func (m Model) renderSearchBar() string {
+	focused := m.focusedPane == paneSearch
+	if focused {
+		// Show the active textinput
+		bar := m.searchInput.View()
+		hint := ui.StyleDim.Render("  esc done")
+		if m.listLoading {
+			hint += "  " + m.spinner.View()
+		}
+		return bar + hint
+	}
+	// Inactive: show hint or current query
+	if m.searchText != "" {
+		label := ui.StyleKeyHint.Render("  / ")
+		query := lipgloss.NewStyle().Foreground(ui.ColorAccent).Italic(true).Render(m.searchText)
+		hint := ui.StyleDim.Render("  (/ to change)")
+		return label + query + hint
+	}
+	return ui.StyleDim.Render("  / to search")
 }
 
 // renderFilterBar renders the checkbox filter row.

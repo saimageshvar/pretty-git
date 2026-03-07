@@ -481,6 +481,7 @@ DiffStat     string // raw `git diff-tree --stat` output
 type CommitFilters struct {
 	OnlyAuthorEmail string // empty = all authors
 	SkipMerges      bool
+	GrepPattern     string // passed to --grep; empty = no grep filter
 }
 
 // CurrentUserEmail returns the value of `git config user.email`, or "".
@@ -511,6 +512,9 @@ func ListCommits(ref string, limit int, filters CommitFilters) ([]Commit, error)
 	}
 	if filters.SkipMerges {
 		args = append(args, "--no-merges")
+	}
+	if filters.GrepPattern != "" {
+		args = append(args, "--grep="+filters.GrepPattern)
 	}
 	out, err := run("git", args...)
 	if err != nil {
