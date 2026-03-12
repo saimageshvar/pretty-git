@@ -514,7 +514,7 @@ func ListCommits(ref string, limit int, filters CommitFilters) ([]Commit, error)
 		args = append(args, "--no-merges")
 	}
 	if filters.GrepPattern != "" {
-		args = append(args, "--grep="+filters.GrepPattern)
+		args = append(args, "--regexp-ignore-case", "--grep="+filters.GrepPattern)
 	}
 	out, err := run("git", args...)
 	if err != nil {
