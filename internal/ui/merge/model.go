@@ -60,18 +60,21 @@ type Model struct {
 	spinner     spinner.Model
 
 	// Modal state
-	showModal    bool
-	selectedBranch string
-	currentBranch  string
-	filesChanged   int
-	lastCommits    []git.Commit
+	showModal       bool
+	showConflictModal bool
+	selectedBranch  string
+	currentBranch   string
+	filesChanged    int
+	lastCommits     []git.Commit
 	loadingPreview  bool
+	conflicts       []string
 }
 
 type mergeDoneMsg struct {
-	err       error
+	err          error
 	targetBranch string
 	sourceBranch string
+	conflicts    []string
 }
 
 type previewLoadedMsg struct {
@@ -197,8 +200,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case mergeDoneMsg:
 		m.merging = false
 		if msg.err != nil {
-			m.err = msg.err.Error()
-			m.showModal = false
+			if len(msg.conflicts) > 0 {
+				// Conflict case - show conflict modal
+				m.conflicts = msg.conflicts
+				m.showModal = false
+				m.showConflictModal = true
+			} else {
+				// Other error
+				m.err = msg.err.Error()
+				m.showModal = false
+			}
 			return m, nil
 		}
 		m.mergedTo = msg.targetBranch
@@ -207,6 +218,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyMsg:
+		if m.showConflictModal {
+			return m.updateConflictModal(msg)
+		}
 		if m.showModal {
 			return m.updateModal(msg)
 		}
@@ -288,11 +302,25 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateConflictModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Select), key.Matches(msg, m.keys.EscBack):
+		m.showConflictModal = false
+		m.quitting = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
 // ── View ───────────────────────────────────────────────────────────────────
 
 func (m Model) View() string {
 	if m.done || m.quitting {
 		return ""
+	}
+
+	if m.showConflictModal {
+		return m.viewConflictModal()
 	}
 
 	if m.showModal {
@@ -355,17 +383,53 @@ func (m Model) viewModal() string {
 
 	sb.WriteString("\n")
 
-	// Error if any
-	if m.err != "" {
-		sb.WriteString(ui.StyleError.Render("  ✗ "+m.err) + "\n\n")
-	}
-
 	// Buttons
 	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", modalW)) + "\n")
 	sb.WriteString("  " + ui.StyleKeyHint.Render("enter/y") +
 		ui.StyleDim.Render(" confirm    ") +
 		ui.StyleKeyHint.Render("esc/n") +
 		ui.StyleDim.Render(" cancel"))
+
+	return sb.String()
+}
+
+func (m Model) viewConflictModal() string {
+	var sb strings.Builder
+
+	// Modal dimensions
+	modalW := 60
+	if m.width < modalW+4 {
+		modalW = m.width - 4
+	}
+	if modalW < 30 {
+		modalW = 30
+	}
+
+	// Header
+	sb.WriteString(ui.StyleError.Render("  ✗ Merge Conflict") + "\n")
+	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", modalW)) + "\n\n")
+
+	sb.WriteString(ui.StyleDim.Render("  Conflicts in "+fmt.Sprintf("%d", len(m.conflicts))+" file(s):") + "\n\n")
+	for _, f := range m.conflicts {
+		line := "    " + f
+		if len(line) > modalW-2 {
+			line = line[:modalW-5] + "…"
+		}
+		sb.WriteString(lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(line) + "\n")
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(ui.StyleDim.Render("  Resolve conflicts manually, then:") + "\n")
+	sb.WriteString(ui.StyleDim.Render("    git add <files>") + "\n")
+	sb.WriteString(ui.StyleDim.Render("    git commit") + "\n")
+	sb.WriteString("\n")
+	sb.WriteString(ui.StyleDim.Render("  Or abort the merge:") + "\n")
+	sb.WriteString(ui.StyleDim.Render("    git merge --abort") + "\n")
+
+	sb.WriteString("\n")
+	sb.WriteString(ui.StyleDivider.Render(strings.Repeat("─", modalW)) + "\n")
+	sb.WriteString("  " + ui.StyleKeyHint.Render("enter") +
+		ui.StyleDim.Render(" ok"))
 
 	return sb.String()
 }
@@ -550,11 +614,16 @@ func loadPreview(currentBranch, targetBranch string) tea.Cmd {
 
 func doMerge(targetBranch, sourceBranch string) tea.Cmd {
 	return func() tea.Msg {
-		err := git.SwitchAndMerge(targetBranch, sourceBranch)
+		result := git.SwitchAndMergeWithResult(targetBranch, sourceBranch)
+		var err error
+		if !result.Success {
+			err = fmt.Errorf("%s", result.ErrorMessage)
+		}
 		return mergeDoneMsg{
 			err:          err,
 			targetBranch: targetBranch,
 			sourceBranch: sourceBranch,
+			conflicts:    result.Conflicts,
 		}
 	}
 }

@@ -1196,10 +1196,86 @@ func MergePreview(sourceBranch, targetBranch string) (int, error) {
 	return fileCount, nil
 }
 
+// MergeResult holds the result of a merge operation.
+type MergeResult struct {
+	Success      bool
+	Conflicts    []string // files with conflicts (if any)
+	ErrorMessage string   // raw git error message
+}
+
 // SwitchAndMerge switches to targetBranch and merges sourceBranch into it.
 func SwitchAndMerge(targetBranch, sourceBranch string) error {
+	result := SwitchAndMergeWithResult(targetBranch, sourceBranch)
+	if result.Success {
+		return nil
+	}
+	if len(result.Conflicts) > 0 {
+		return fmt.Errorf("merge conflict in %d file(s):\n%s\n\nResolve conflicts manually, then:\n  git add <files>\n  git commit\n\nOr abort:\n  git merge --abort", len(result.Conflicts), strings.Join(result.Conflicts, "\n"))
+	}
+	return fmt.Errorf("%s", result.ErrorMessage)
+}
+
+// SwitchAndMergeWithResult switches to targetBranch and merges sourceBranch into it.
+// Returns detailed result including conflict information.
+func SwitchAndMergeWithResult(targetBranch, sourceBranch string) MergeResult {
 	// First, switch to the target branch
 	cmd := exec.Command("git", "checkout", targetBranch)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return MergeResult{Success: false, ErrorMessage: msg}
+	}
+	
+	// Then merge the source branch
+	cmd = exec.Command("git", "merge", sourceBranch)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		// Check for conflicts
+		conflicts := ListConflictedFiles()
+		if len(conflicts) > 0 {
+			return MergeResult{
+				Success:      false,
+				Conflicts:    conflicts,
+				ErrorMessage: msg,
+			}
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return MergeResult{Success: false, ErrorMessage: msg}
+	}
+	
+	return MergeResult{Success: true}
+}
+
+// ListConflictedFiles returns files with merge conflicts.
+func ListConflictedFiles() []string {
+	out, err := run("git", "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files
+}
+
+// IsMergeInProgress returns true if a merge is in progress.
+func IsMergeInProgress() bool {
+	_, err := run("git", "merge-head")
+	return err == nil
+}
+
+// AbortMerge aborts an in-progress merge.
+func AbortMerge() error {
+	cmd := exec.Command("git", "merge", "--abort")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -1208,17 +1284,5 @@ func SwitchAndMerge(targetBranch, sourceBranch string) error {
 		}
 		return fmt.Errorf("%s", msg)
 	}
-	
-	// Then merge the source branch
-	cmd = exec.Command("git", "merge", sourceBranch)
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			return err
-		}
-		return fmt.Errorf("%s", msg)
-	}
-	
 	return nil
 }
