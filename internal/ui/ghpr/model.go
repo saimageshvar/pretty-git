@@ -252,7 +252,7 @@ func (m Model) renderList() string {
 	var sb strings.Builder
 
 	// Column headers
-	sb.WriteString(ui.StyleDim.Render("   #   State   Review          Files   Age      Title") + "\n")
+	sb.WriteString(ui.StyleDim.Render("   #   State   Approvals   Files   Age      Title") + "\n")
 
 	end := m.offset + m.visibleRows
 	if end > len(m.prs) {
@@ -285,21 +285,15 @@ func (m Model) renderRow(pr gh.PR, isSelected bool) string {
 	}
 	state := stateStyle.Render(fmt.Sprintf("%-7s", stateIcon+" "+strings.ToLower(pr.State)))
 
-	// Review status
-	review := gh.ReviewStatus(pr.ReviewDecision)
-	var reviewStyle lipgloss.Style
-	switch strings.ToUpper(pr.ReviewDecision) {
-	case "APPROVED":
-		reviewStyle = lipgloss.NewStyle().Foreground(ui.ColorParentMerged)
-	case "CHANGES_REQUESTED":
-		reviewStyle = lipgloss.NewStyle().Foreground(ui.ColorError)
-	default:
-		reviewStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
+	// Approvals count
+	approvals := fmt.Sprintf("%d", pr.Approvals)
+	var approvalsStyle lipgloss.Style
+	if pr.Approvals > 0 {
+		approvalsStyle = lipgloss.NewStyle().Foreground(ui.ColorParentMerged)
+	} else {
+		approvalsStyle = lipgloss.NewStyle().Foreground(ui.ColorDim)
 	}
-	if review == "" {
-		review = "—"
-	}
-	reviewStr := reviewStyle.Render(fmt.Sprintf("%-15s", review))
+	approvalsStr := approvalsStyle.Render(fmt.Sprintf("%-10s", approvals))
 
 	// Files changed
 	files := fmt.Sprintf("%d file", pr.ChangedFiles)
@@ -331,7 +325,7 @@ func (m Model) renderRow(pr gh.PR, isSelected bool) string {
 	}
 	titleStr := lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(title)
 
-	row := fmt.Sprintf("  %s %s %s %s %s %s", num, state, reviewStr, filesStr, ageStr, titleStr)
+	row := fmt.Sprintf("  %s %s %s %s %s %s", num, state, approvalsStr, filesStr, ageStr, titleStr)
 
 	if isSelected {
 		return lipgloss.NewStyle().

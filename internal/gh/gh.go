@@ -23,6 +23,7 @@ type PR struct {
 	Deletions      int       `json:"deletions"`
 	ChangedFiles   int       `json:"changedFiles"`
 	URL            string    `json:"url"`
+	Approvals      int       `json:"approvals"` // count of APPROVED reviews
 }
 
 // prJSON is the raw JSON structure from gh pr list.
@@ -40,6 +41,12 @@ type prJSON struct {
 	Deletions      int            `json:"deletions"`
 	ChangedFiles   int            `json:"changedFiles"`
 	URL            string         `json:"url"`
+	LatestReviews  []prReview     `json:"latestReviews"`
+}
+
+type prReview struct {
+	State  string `json:"state"`
+	Author string `json:"author"`
 }
 
 type prAuthor struct {
@@ -70,7 +77,7 @@ func ListMyPRs(limit int) ([]PR, error) {
 	if limit <= 0 {
 		limit = 30
 	}
-	fields := "number,title,state,author,baseRefName,headRefName,createdAt,reviewDecision,comments,additions,deletions,changedFiles,url"
+	fields := "number,title,state,author,baseRefName,headRefName,createdAt,reviewDecision,comments,additions,deletions,changedFiles,url,latestReviews"
 	cmd := exec.Command("gh", "pr", "list",
 		"--author", "@me",
 		"--state", "all",
@@ -89,7 +96,7 @@ func ListReviewRequested(limit int) ([]PR, error) {
 	if limit <= 0 {
 		limit = 30
 	}
-	fields := "number,title,state,author,baseRefName,headRefName,createdAt,reviewDecision,comments,additions,deletions,changedFiles,url"
+	fields := "number,title,state,author,baseRefName,headRefName,createdAt,reviewDecision,comments,additions,deletions,changedFiles,url,latestReviews"
 	cmd := exec.Command("gh", "pr", "list",
 		"--search", "review-requested:@me",
 		"--state", "open",
@@ -117,6 +124,13 @@ func parsePRs(data []byte) ([]PR, error) {
 		if r.Author.Name != "" {
 			author = r.Author.Name
 		}
+		// Count approvals from latestReviews
+		approvals := 0
+		for _, review := range r.LatestReviews {
+			if review.State == "APPROVED" {
+				approvals++
+			}
+		}
 		prs = append(prs, PR{
 			Number:         r.Number,
 			Title:          r.Title,
@@ -126,11 +140,12 @@ func parsePRs(data []byte) ([]PR, error) {
 			HeadRef:        r.HeadRefName,
 			CreatedAt:      createdAt,
 			ReviewDecision: r.ReviewDecision,
-			Comments:        len(r.Comments),
-			Additions:       r.Additions,
-			Deletions:       r.Deletions,
-			ChangedFiles:    r.ChangedFiles,
-			URL:             r.URL,
+			Comments:       len(r.Comments),
+			Additions:      r.Additions,
+			Deletions:      r.Deletions,
+			ChangedFiles:   r.ChangedFiles,
+			URL:            r.URL,
+			Approvals:      approvals,
 		})
 	}
 	return prs, nil
