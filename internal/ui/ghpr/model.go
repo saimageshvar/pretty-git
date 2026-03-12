@@ -252,7 +252,7 @@ func (m Model) renderList() string {
 	var sb strings.Builder
 
 	// Column headers
-	sb.WriteString(ui.StyleDim.Render("   #   State   Review          Lines   Age      Title") + "\n")
+	sb.WriteString(ui.StyleDim.Render("   #   State   Review          Files   Age      Title") + "\n")
 
 	end := m.offset + m.visibleRows
 	if end > len(m.prs) {
@@ -301,9 +301,12 @@ func (m Model) renderRow(pr gh.PR, isSelected bool) string {
 	}
 	reviewStr := reviewStyle.Render(fmt.Sprintf("%-15s", review))
 
-	// Lines changed
-	lines := fmt.Sprintf("+%d/-%d", pr.Additions, pr.Deletions)
-	linesStr := lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(fmt.Sprintf("%-8s", lines))
+	// Files changed
+	files := fmt.Sprintf("%d file", pr.ChangedFiles)
+	if pr.ChangedFiles != 1 {
+		files = fmt.Sprintf("%d files", pr.ChangedFiles)
+	}
+	filesStr := lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(fmt.Sprintf("%-7s", files))
 
 	// Age
 	days := gh.DaysOpen(pr.CreatedAt)
@@ -328,7 +331,7 @@ func (m Model) renderRow(pr gh.PR, isSelected bool) string {
 	}
 	titleStr := lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(title)
 
-	row := fmt.Sprintf("  %s %s %s %s %s %s", num, state, reviewStr, linesStr, ageStr, titleStr)
+	row := fmt.Sprintf("  %s %s %s %s %s %s", num, state, reviewStr, filesStr, ageStr, titleStr)
 
 	if isSelected {
 		return lipgloss.NewStyle().
