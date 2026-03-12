@@ -28,6 +28,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  stash \"msg\"               quick stash all with message")
 		fmt.Fprintln(os.Stderr, "  stash --staged \"msg\"      quick stash staged only")
 		fmt.Fprintln(os.Stderr, "  stash --unstaged \"msg\"    quick stash unstaged only")
+		fmt.Fprintln(os.Stderr, "  gh                        list your pull requests (requires gh CLI)")
+		fmt.Fprintln(os.Stderr, "  gh pr                     list your pull requests")
 		os.Exit(1)
 	}
 
@@ -47,6 +49,8 @@ func main() {
 		runWithUpdate("prompt", func() { runPrompt(os.Args[2:]) })
 	case "stash":
 		runWithUpdate("stash", func() { runStash(os.Args[2:]) })
+	case "gh":
+		runWithUpdate("gh", func() { runGH(os.Args[2:]) })
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
