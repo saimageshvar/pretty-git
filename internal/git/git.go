@@ -1154,3 +1154,71 @@ func LastCommitOneLiner() string {
 	}
 	return strings.TrimSpace(out)
 }
+
+// ── Merge ──────────────────────────────────────────────────────────────────
+
+// MergePreview returns the number of files that would change if sourceBranch
+// were merged into targetBranch.
+func MergePreview(sourceBranch, targetBranch string) (int, error) {
+	// Use git diff --stat to count files changed between the merge base and source
+	out, err := run("git", "diff", "--stat", targetBranch+"..."+sourceBranch)
+	if err != nil {
+		return 0, err
+	}
+	
+	// Count lines in the diff output (excluding the summary line)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) == 0 {
+		return 0, nil
+	}
+	
+	// The last line is a summary like "5 files changed, 100 insertions(+), 50 deletions(-)"
+	// We want to count actual file lines, not the summary
+	fileCount := 0
+	for _, line := range lines {
+		if strings.Contains(line, "|") || strings.Contains(line, "=>") {
+			fileCount++
+		}
+	}
+	
+	// If no files found via parsing, try parsing the summary line
+	if fileCount == 0 && len(lines) > 0 {
+		summary := lines[len(lines)-1]
+		parts := strings.Fields(summary)
+		for i, p := range parts {
+			if strings.HasPrefix(p, "file") && i > 0 {
+				fmt.Sscanf(parts[i-1], "%d", &fileCount)
+				break
+			}
+		}
+	}
+	
+	return fileCount, nil
+}
+
+// SwitchAndMerge switches to targetBranch and merges sourceBranch into it.
+func SwitchAndMerge(targetBranch, sourceBranch string) error {
+	// First, switch to the target branch
+	cmd := exec.Command("git", "checkout", targetBranch)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	
+	// Then merge the source branch
+	cmd = exec.Command("git", "merge", sourceBranch)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	
+	return nil
+}

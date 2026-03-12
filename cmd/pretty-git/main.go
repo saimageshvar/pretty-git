@@ -22,6 +22,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  checkout <name>           switch to branch (create if missing)")
 		fmt.Fprintln(os.Stderr, "  checkout -b [name]        create new branch")
 		fmt.Fprintln(os.Stderr, "  log                       browse commit log")
+		fmt.Fprintln(os.Stderr, "  merge                     merge current branch into selected branch")
 		fmt.Fprintln(os.Stderr, "  prompt                    current branch & description for shell prompt")
 		fmt.Fprintln(os.Stderr, "  stash                     interactive stash create wizard")
 		fmt.Fprintln(os.Stderr, "  stash apply|pop|drop      browse stashes and apply/pop/drop")
@@ -43,6 +44,8 @@ func main() {
 		runWithUpdate("checkout", func() { runCheckout(os.Args[2:]) })
 	case "log":
 		runWithUpdate("log", runLog)
+	case "merge":
+		runWithUpdate("merge", runMerge)
 	case "prompt":
 		runWithUpdate("prompt", func() { runPrompt(os.Args[2:]) })
 	case "stash":
