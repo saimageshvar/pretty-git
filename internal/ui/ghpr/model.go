@@ -252,7 +252,7 @@ func (m Model) renderList() string {
 	var sb strings.Builder
 
 	// Column headers
-	sb.WriteString(ui.StyleDim.Render("   #   State   Approvals   Files   Age      Title") + "\n")
+	sb.WriteString(ui.StyleDim.Render("   #   Approvals   Files   Age      Title") + "\n")
 
 	end := m.offset + m.visibleRows
 	if end > len(m.prs) {
@@ -271,19 +271,6 @@ func (m Model) renderList() string {
 func (m Model) renderRow(pr gh.PR, isSelected bool) string {
 	// Number
 	num := fmt.Sprintf("#%-5d", pr.Number)
-
-	// State with icon
-	stateIcon := gh.StateIcon(pr.State)
-	var stateStyle lipgloss.Style
-	switch strings.ToUpper(pr.State) {
-	case "OPEN":
-		stateStyle = lipgloss.NewStyle().Foreground(ui.ColorParentAhead)
-	case "MERGED":
-		stateStyle = lipgloss.NewStyle().Foreground(ui.ColorParentMerged)
-	case "CLOSED":
-		stateStyle = lipgloss.NewStyle().Foreground(ui.ColorError)
-	}
-	state := stateStyle.Render(fmt.Sprintf("%-7s", stateIcon+" "+strings.ToLower(pr.State)))
 
 	// Approvals count
 	approvals := fmt.Sprintf("%d", pr.Approvals)
@@ -315,7 +302,7 @@ func (m Model) renderRow(pr gh.PR, isSelected bool) string {
 	ageStr := lipgloss.NewStyle().Foreground(ui.ColorRelTime).Render(fmt.Sprintf("%-8s", age))
 
 	// Title (truncate to fit)
-	availWidth := m.width - 45 // approximate space used by other columns
+	availWidth := m.width - 38 // approximate space used by other columns
 	if availWidth < 10 {
 		availWidth = 10
 	}
@@ -325,7 +312,7 @@ func (m Model) renderRow(pr gh.PR, isSelected bool) string {
 	}
 	titleStr := lipgloss.NewStyle().Foreground(ui.ColorHeader).Render(title)
 
-	row := fmt.Sprintf("  %s %s %s %s %s %s", num, state, approvalsStr, filesStr, ageStr, titleStr)
+	row := fmt.Sprintf("  %s %s %s %s %s", num, approvalsStr, filesStr, ageStr, titleStr)
 
 	if isSelected {
 		return lipgloss.NewStyle().

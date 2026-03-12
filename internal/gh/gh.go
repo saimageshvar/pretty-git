@@ -72,7 +72,7 @@ func IsAvailable() bool {
 	return err == nil
 }
 
-// ListMyPRs fetches PRs authored by the current user.
+// ListMyPRs fetches open PRs authored by the current user.
 func ListMyPRs(limit int) ([]PR, error) {
 	if limit <= 0 {
 		limit = 30
@@ -80,7 +80,7 @@ func ListMyPRs(limit int) ([]PR, error) {
 	fields := "number,title,state,author,baseRefName,headRefName,createdAt,reviewDecision,comments,additions,deletions,changedFiles,url,latestReviews"
 	cmd := exec.Command("gh", "pr", "list",
 		"--author", "@me",
-		"--state", "all",
+		"--state", "open",
 		"--json", fields,
 		"--limit", fmt.Sprintf("%d", limit),
 	)
