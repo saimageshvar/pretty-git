@@ -90,9 +90,19 @@ func runStash(args []string) {
 	// Join remaining args as the message
 	msg := strings.Join(msgArgs, " ")
 	if msg == "" {
-		// No message given — fall back to interactive wizard
-		runStashCreate(repoName, width, height)
-		return
+		// No message provided — use default based on type
+		switch stashType {
+		case "staged":
+			msg = "staged changes"
+		case "unstaged":
+			msg = "unstaged changes"
+		case "custom":
+			msg = "selected files"
+		default:
+			// For "all" with no message, fall back to interactive wizard
+			runStashCreate(repoName, width, height)
+			return
+		}
 	}
 
 	// Quick stash: check we have files to stash
@@ -106,14 +116,12 @@ func runStash(args []string) {
 		os.Exit(0)
 	}
 
-	shortHash := git.LastCommitShortHash()
-	finalMsg := shortHash + ": " + msg
-
-	if err := git.StashPush(finalMsg, stashType, customFiles); err != nil {
+	result, err := git.StashPush(msg, stashType, customFiles)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "pgit: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "✓ stash created: %s\n", finalMsg)
+	fmt.Fprintf(os.Stderr, "✓ stash created: %s\n", result)
 }
 
 func runStashCreate(repoName string, width, height int) {
