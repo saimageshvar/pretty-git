@@ -506,6 +506,25 @@ func buildBrowseDetailLines(d *git.StashDetail, dw int) []string {
 
 	// Message (ref is already shown in the column header)
 	add("  " + valS(d.Message))
+
+	// Type indicator
+	typeLabel := ""
+	switch d.StashType {
+	case git.StashTypeStaged:
+		typeLabel = "  " + lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("staged")
+	case git.StashTypeUnstaged:
+		typeLabel = "  " + lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("unstaged")
+	case git.StashTypeCustom:
+		typeLabel = "  " + lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("custom")
+		if len(d.TargetFiles) > 0 {
+			typeLabel = fmt.Sprintf("  "+lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("custom (%d files)"), len(d.TargetFiles))
+		}
+	case git.StashTypeAll:
+		typeLabel = "  " + lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("all")
+	}
+	if typeLabel != "" {
+		add(typeLabel)
+	}
 	add("")
 
 	// Metadata
@@ -607,7 +626,7 @@ func (m BrowseModel) renderConfirmModal() string {
 
 func doLoadBrowseDetail(entry git.StashEntry) tea.Cmd {
 	return func() tea.Msg {
-		d, err := git.GetStashDetail(entry.Ref)
+		d, err := git.GetStashDetailTyped(entry.Ref, entry.StashType, entry.TargetFiles)
 		if err == nil {
 			d.StashEntry = entry // populate all metadata fields
 		}

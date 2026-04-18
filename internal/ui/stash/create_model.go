@@ -26,6 +26,7 @@ const (
 // stashDoneMsg is returned when the stash operation completes.
 type stashDoneMsg struct {
 	err error
+	msg string
 }
 
 // paneRows is the fixed visible height for scrollable panes in the create wizard.
@@ -184,7 +185,7 @@ func (m CreateModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phase = phaseMessage // go back to message phase to show error
 			return m, nil
 		}
-		m.result = "✓ stash created"
+		m.result = "✓ stash created: " + msg.msg
 		return m, tea.Quit
 
 	case tea.KeyMsg:
@@ -349,14 +350,9 @@ func (m CreateModel) updateMessage(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *CreateModel) doStash() tea.Cmd {
 	return func() tea.Msg {
-		// Build the message: "hash: user message" or just hash if empty
-		shortHash := git.LastCommitShortHash()
 		userMsg := strings.TrimSpace(m.msgInput.Value())
-		var finalMsg string
 		if userMsg == "" {
-			finalMsg = m.defaultMsg
-		} else {
-			finalMsg = shortHash + ": " + userMsg
+			userMsg = m.defaultMsg
 		}
 
 		// Determine stash type string
@@ -382,8 +378,8 @@ func (m *CreateModel) doStash() tea.Cmd {
 			}
 		}
 
-		err := git.StashPush(finalMsg, stashTypeStr, customFiles)
-		return stashDoneMsg{err: err}
+		result, err := git.StashPush(userMsg, stashTypeStr, customFiles)
+		return stashDoneMsg{err: err, msg: result}
 	}
 }
 
