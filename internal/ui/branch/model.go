@@ -82,6 +82,7 @@ type Model struct {
 	editSaving        bool
 
 	spinner spinner.Model
+	mode    PickerMode // controls Enter behavior: ModeSwitch or ModeSelect
 }
 
 type switchDoneMsg struct {
@@ -98,7 +99,12 @@ type editSavedMsg struct {
 	behind int
 }
 
-func New(branches []git.Branch, repoName string, termWidth, termHeight int) Model {
+func New(branches []git.Branch, repoName string, termWidth, termHeight int, modes ...PickerMode) Model {
+	mode := ModeSwitch // default
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
+
 	local, remote := 0, 0
 	for _, b := range branches {
 		if b.IsRemote {
@@ -184,8 +190,9 @@ func New(branches []git.Branch, repoName string, termWidth, termHeight int) Mode
 		editParentFilter: epf,
 		editDescInput:    edi,
 		help:             h,
-		keys:             defaultKeyMap(),
+		keys:             defaultKeyMap(mode),
 		spinner:          sp,
+		mode:             mode,
 	}
 }
 
@@ -315,7 +322,15 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		b := m.filtered[m.cursor].branch
 		if b.IsCurrent {
+			if m.mode == ModeSelect {
+				m.err = "cannot merge a branch into itself"
+			}
 			return m, nil
+		}
+		if m.mode == ModeSelect {
+			m.switchedTo = b.Name
+			m.done = true
+			return m, tea.Quit
 		}
 		m.switching = true
 		m.err = ""

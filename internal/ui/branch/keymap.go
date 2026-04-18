@@ -4,6 +4,24 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 )
 
+// PickerMode controls the Enter-key behavior in the branch list.
+type PickerMode int
+
+const (
+	ModeSwitch PickerMode = iota // default: checkout/switch to selected branch
+	ModeSelect                    // return selected branch name, no git action
+)
+
+// String returns a human-readable label for the mode, used in key hints.
+func (m PickerMode) String() string {
+	switch m {
+	case ModeSelect:
+		return "select"
+	default:
+		return "switch"
+	}
+}
+
 // keyMap defines all keybindings for the branch view.
 type keyMap struct {
 	Up      key.Binding
@@ -15,7 +33,7 @@ type keyMap struct {
 }
 
 // defaultKeyMap returns the keybindings used by the branch view.
-func defaultKeyMap() keyMap {
+func defaultKeyMap(mode PickerMode) keyMap {
 	return keyMap{
 		Up: key.NewBinding(
 			key.WithKeys("up"),
@@ -27,7 +45,7 @@ func defaultKeyMap() keyMap {
 		),
 		Switch: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("enter", "switch"),
+			key.WithHelp("enter", mode.String()),
 		),
 		Edit: key.NewBinding(
 			key.WithKeys("ctrl+e"),
