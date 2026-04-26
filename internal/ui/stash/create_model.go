@@ -17,10 +17,10 @@ import (
 
 // stashType constants.
 const (
-	stashTypeStaged   = 0
+	stashTypeAll      = 0
 	stashTypeUnstaged = 1
-	stashTypeAll      = 2
-	stashTypeCustom   = 3
+	stashTypeCustom   = 2
+	stashTypeStaged   = 3
 )
 
 // stashDoneMsg is returned when the stash operation completes.
@@ -43,6 +43,8 @@ type CreateModel struct {
 	unstagedCount  int
 	allCount       int
 	rightPaneFocus bool // true when right pane (file list / preview) has focus
+	mmFiles        []string // files with both staged and unstaged changes
+	mmWarning      string   // warning text when MM files exist
 
 	// Right pane — file list (custom) or preview scroll (other types)
 	fileCursor   int
@@ -69,17 +71,25 @@ type CreateModel struct {
 
 // typeOption describes one stash-type option in phase 0.
 type typeOption struct {
-	label string
-	desc  string
-	count int
+	label          string
+	desc           string
+	count          int
+	disabled       bool
+	disabledReason string
 }
 
 func (m *CreateModel) typeOptions() []typeOption {
+	stagedDisabled := len(m.mmFiles) > 0
+	stagedReason := ""
+	if stagedDisabled {
+		names := strings.Join(m.mmFiles, ", ")
+		stagedReason = fmt.Sprintf("Staged disabled: %d files have changes in both staged and unstaged areas (%s). Use Unstaged changes or All changes instead.", len(m.mmFiles), names)
+	}
 	return []typeOption{
-		{"Staged files", "only indexed changes", m.stagedCount},
-		{"Unstaged files", "working-tree changes only", m.unstagedCount},
-		{"All modified", "staged + unstaged + untracked", m.allCount},
-		{"Custom files…", "pick specific files", m.allCount},
+		{"All changes", "staged + unstaged + untracked", m.allCount, false, ""},
+		{"Unstaged changes", "working tree only", m.unstagedCount, false, ""},
+		{"Pick specific files…", "choose individual files", m.allCount, false, ""},
+		{"Staged changes", "index only", m.stagedCount, stagedDisabled, stagedReason},
 	}
 }
 
@@ -116,6 +126,21 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 	unstaged := git.CountUnstagedFiles(files)
 	all := len(files)
 
+	// Detect MM files for staged-stash warning
+	var mmFiles []string
+	var mmWarning string
+	for _, f := range files {
+		if len(f.Code) >= 2 &&
+			f.Code[0] != ' ' && f.Code[0] != '?' &&
+			f.Code[1] != ' ' && f.Code != "??" {
+			mmFiles = append(mmFiles, f.Path)
+		}
+	}
+	if len(mmFiles) > 0 {
+		names := strings.Join(mmFiles, ", ")
+		mmWarning = fmt.Sprintf("Staged disabled: %d files have changes in both staged and unstaged areas (%s). Use Unstaged changes or All changes instead.", len(mmFiles), names)
+	}
+
 	ti := textinput.New()
 	ti.Placeholder = git.LastCommitOneLiner()
 	ti.Focus()
@@ -133,7 +158,7 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 	h.Width = termWidth
 
 	// Start cursor on first option with files
-	startCursor := 2 // default to "All modified"
+	startCursor := stashTypeAll // default to "All changes"
 	if staged > 0 {
 		startCursor = 0
 	}
@@ -148,6 +173,8 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 		stagedCount:   staged,
 		unstagedCount: unstaged,
 		allCount:      all,
+		mmFiles:       mmFiles,
+		mmWarning:     mmWarning,
 		fileSelected:  allSelected,
 		msgInput:      ti,
 		defaultMsg:    git.LastCommitOneLiner(),
@@ -220,7 +247,10 @@ func (m CreateModel) updateLeftPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.Up):
 		for i := m.typeCursor - 1; i >= 0; i-- {
-			if i == stashTypeCustom || opts[i].count > 0 {
+			if opts[i].disabled {
+				continue
+			}
+			if i == stashTypeCustom || opts[i].count > 0 || true {
 				m.typeCursor = i
 				break
 			}
@@ -228,7 +258,10 @@ func (m CreateModel) updateLeftPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.Down):
 		for i := m.typeCursor + 1; i < len(opts); i++ {
-			if i == stashTypeCustom || opts[i].count > 0 {
+			if opts[i].disabled {
+				continue
+			}
+			if i == stashTypeCustom || opts[i].count > 0 || true {
 				m.typeCursor = i
 				break
 			}
@@ -240,6 +273,9 @@ func (m CreateModel) updateLeftPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fileOffset = 0
 
 	case key.Matches(msg, m.keys.Select):
+		if opts[m.typeCursor].disabled {
+			break
+		}
 		if m.typeCursor == stashTypeCustom {
 			// Force user into the file picker — never skip it for custom.
 			m.rightPaneFocus = true
@@ -464,11 +500,23 @@ func (m CreateModel) viewTypeSelect() string {
 
 	for i, opt := range opts {
 		isCursor := i == m.typeCursor
-		isEmpty := (i != stashTypeCustom) && opt.count == 0
+		isDisabled := opt.disabled
+		isEmpty := (i != stashTypeCustom) && opt.count == 0 && !isDisabled
 		bg := ui.ColorCursorBg
 
 		var row string
-		if isCursor && !isEmpty {
+		if isDisabled && isCursor {
+			cursorS := lipgloss.NewStyle().Foreground(ui.ColorDim).Render("» ")
+			radioS  := ui.StyleDim.Render("○ ")
+			labelS  := lipgloss.NewStyle().Foreground(ui.ColorDim).Width(18).Render(opt.label)
+			descS   := ui.StyleDim.Render(truncateCreateStr(opt.disabledReason, descWidth))
+			row = padToLW(cursorS + radioS + labelS + " " + descS)
+		} else if isDisabled {
+			radioS := ui.StyleDim.Render("○ ")
+			labelS := lipgloss.NewStyle().Foreground(ui.ColorDim).Width(18).Render(opt.label)
+			descS  := ui.StyleDim.Render(truncateCreateStr(opt.disabledReason, descWidth))
+			row = padToLW("  " + radioS + labelS + " " + descS)
+		} else if isCursor && !isEmpty {
 			// Each element gets background applied individually (avoids ANSI width miscounts)
 			cursorS := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorAccent).Bold(true).Render("» ")
 			radioS  := lipgloss.NewStyle().Background(bg).Foreground(ui.ColorAccent).Bold(true).Render("● ")
@@ -501,6 +549,13 @@ func (m CreateModel) viewTypeSelect() string {
 		}
 		leftRows = append(leftRows, row)
 	}
+
+	if m.mmWarning != "" {
+		leftRows = append(leftRows, padToLW(""))
+		warningS := lipgloss.NewStyle().Foreground(ui.ColorWarning).Italic(true)
+		leftRows = append(leftRows, padToLW("  "+warningS.Render("↳ "+m.mmWarning)))
+	}
+
 	leftRows = append(leftRows, strings.Repeat(" ", lw)) // trailing blank
 
 	// Build right-pane: fixed paneRows height with scroll indicator at bottom
@@ -685,7 +740,7 @@ func (m CreateModel) viewMessage() string {
 	sb.WriteString("\n")
 
 	// File summary (left aligned, compact)
-	typeNames := []string{"staged files", "unstaged files", "modified files", "selected files"}
+	typeNames := []string{"modified files", "unstaged files", "selected files", "staged files"}
 	var filesToShow []git.FileStatus
 	switch m.stashType {
 	case stashTypeStaged:
