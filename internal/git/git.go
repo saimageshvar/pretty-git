@@ -802,7 +802,7 @@ func ListStashes() ([]StashEntry, error) {
 		entries = append(entries, StashEntry{
 			Index:   i,
 			Ref:     ref,
-			Message: userMsg,
+			Message: stripStashPrefix(userMsg),
 			Branch:  branch,
 			RelTime: relTime,
 		})
