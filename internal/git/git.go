@@ -778,6 +778,17 @@ func StashShowFiles(ref string) ([]StashDetailFile, error) {
 		path := fields[len(fields)-1]
 		files = append(files, StashDetailFile{Status: status, Path: path})
 	}
+
+	// Include untracked files from stash^3 (silently ignore if stash has no untracked files)
+	if untrackedOut, utErr := run("git", "ls-tree", "--name-only", ref+"^3"); utErr == nil {
+		for _, path := range strings.Split(strings.TrimRight(untrackedOut, "\n"), "\n") {
+			if path == "" {
+				continue
+			}
+			files = append(files, StashDetailFile{Status: "U", Path: path})
+		}
+	}
+
 	return files, nil
 }
 

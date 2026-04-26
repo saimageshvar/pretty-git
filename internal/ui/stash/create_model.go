@@ -838,7 +838,12 @@ func statusFg(s string) lipgloss.TerminalColor {
 
 // statusColor returns a bold colored status letter.
 func statusColor(s string) string {
-	return lipgloss.NewStyle().Foreground(statusFg(s)).Bold(true).Render(s)
+	fg := statusFg(s)
+	display := s
+	if display == "U" {
+		display = "?"
+	}
+	return lipgloss.NewStyle().Foreground(fg).Bold(true).Render(display)
 }
 
 // Result returns the success message (empty if not done or error).
