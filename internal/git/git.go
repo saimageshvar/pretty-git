@@ -625,13 +625,11 @@ func (f FileStatus) IsUntracked() bool {
 
 // StashEntry holds summary metadata for one stash ref.
 type StashEntry struct {
-	Index       int
-	Ref         string // "stash@{N}"
-	Message     string
-	Branch      string
-	RelTime     string
-	StashType   StashType   // parsed from message prefix
-	TargetFiles []string    // for custom stashes
+	Index   int
+	Ref     string // "stash@{N}"
+	Message string
+	Branch  string
+	RelTime string
 }
 
 // StashDetail holds extended info for one stash.
@@ -788,29 +786,25 @@ func ListStashes() ([]StashEntry, error) {
 
 		// Extract branch from message: "On <branch>: <msg>" or "WIP on <branch>: <msg>"
 		branch := ""
-		rawMsg := msg
+		userMsg := msg
 		if after, ok := strings.CutPrefix(msg, "WIP on "); ok {
 			if colonIdx := strings.Index(after, ": "); colonIdx >= 0 {
 				branch = after[:colonIdx]
-				rawMsg = after[colonIdx+2:]
+				userMsg = after[colonIdx+2:]
 			}
 		} else if after, ok := strings.CutPrefix(msg, "On "); ok {
 			if colonIdx := strings.Index(after, ": "); colonIdx >= 0 {
 				branch = after[:colonIdx]
-				rawMsg = after[colonIdx+2:]
+				userMsg = after[colonIdx+2:]
 			}
 		}
 
-		meta := parseStashMeta(rawMsg)
-
 		entries = append(entries, StashEntry{
-			Index:       i,
-			Ref:         ref,
-			Message:     meta.UserMsg,
-			Branch:      branch,
-			RelTime:     relTime,
-			StashType:   meta.Type,
-			TargetFiles: meta.TargetFiles,
+			Index:   i,
+			Ref:     ref,
+			Message: userMsg,
+			Branch:  branch,
+			RelTime: relTime,
 		})
 	}
 	return entries, nil
