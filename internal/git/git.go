@@ -1130,73 +1130,22 @@ func parseNumStat(ins, dels string) (int, int) {
 }
 
 // StashPush creates a stash with the given message and options.
-// Returns the formatted stash message on success.
-// stashType: "staged", "unstaged", "all", "custom"
+// stashType: "all", "staged", "unstaged", "custom"
 // customFiles: used when stashType == "custom"
 func StashPush(msg, stashType string, customFiles []string) (string, error) {
-	// Pre-check: MM files (both staged and unstaged changes on same file) break
-	// git stash push --staged. Detect early and give a clear error.
-	if stashType == "staged" {
-		files, err := ListModifiedFiles()
-		if err != nil {
-			return "", fmt.Errorf("checking file status: %w", err)
-		}
-		var mmFiles []string
-		for _, f := range files {
-			if len(f.Code) >= 2 && f.Code[0] != ' ' && f.Code[0] != '?' && f.Code[1] != ' ' && f.Code != "??" {
-				mmFiles = append(mmFiles, f.Path)
-			}
-		}
-		if len(mmFiles) > 0 {
-			return "", fmt.Errorf("cannot stash staged changes: the following files have both staged and unstaged changes:\n  %s\n\nStage all changes with `pgit stash` (all), or unstage the unstaged portions first", strings.Join(mmFiles, "\n  "))
-		}
-	}
-
-	// Map stashType string to StashType constant
-	var st StashType
-	switch stashType {
-	case "staged":
-		st = StashTypeStaged
-	case "unstaged":
-		st = StashTypeUnstaged
-	case "custom":
-		st = StashTypeCustom
-	default:
-		st = StashTypeAll
-	}
-
-	// Build the formatted message with metadata prefix
-	shortHash := LastCommitShortHash()
-	finalMsg := formatStashMsg(st, shortHash, msg, customFiles)
-
 	var args []string
 	switch stashType {
 	case "staged":
-		args = []string{"stash", "push", "--staged", "-m", finalMsg}
+		args = []string{"stash", "push", "--staged", "-m", msg}
 	case "unstaged":
-		files, err := ListModifiedFiles()
-		if err != nil {
-			return "", fmt.Errorf("checking file status: %w", err)
-		}
-		hasUnstaged := false
-		for _, f := range files {
-			if len(f.Code) > 1 && f.Code[1] != ' ' && f.Code != "??" {
-				hasUnstaged = true
-			}
-		}
-		if !hasUnstaged {
-			return "", fmt.Errorf("no unstaged files to stash")
-		}
-		args = []string{"stash", "push", "--keep-index", "-m", finalMsg}
-	case "all":
-		args = []string{"stash", "push", "--include-untracked", "-m", finalMsg}
+		args = []string{"stash", "push", "--keep-index", "-m", msg}
 	case "custom":
 		if len(customFiles) == 0 {
 			return "", fmt.Errorf("no files selected for custom stash")
 		}
-		args = append([]string{"stash", "push", "--include-untracked", "-m", finalMsg, "--"}, customFiles...)
-	default:
-		args = []string{"stash", "push", "--include-untracked", "-m", finalMsg}
+		args = append([]string{"stash", "push", "--include-untracked", "-m", msg, "--"}, customFiles...)
+	default: // "all"
+		args = []string{"stash", "push", "--include-untracked", "-m", msg}
 	}
 
 	out, err := exec.Command("git", args...).CombinedOutput()
@@ -1208,7 +1157,7 @@ func StashPush(msg, stashType string, customFiles []string) (string, error) {
 		return "", fmt.Errorf("%s", errMsg)
 	}
 
-	return finalMsg, nil
+	return strings.TrimSpace(string(out)), nil
 }
 
 
