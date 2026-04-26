@@ -873,6 +873,75 @@ func GetStashDetailTyped(ref string, stashType StashType, targetFiles []string) 
 	}, nil
 }
 
+// StashDetailFile represents a single file in a stash detail.
+type StashDetailFile struct {
+	Status string // "M", "A", "D", ...
+	Path   string
+}
+
+// StashShowFiles returns files changed in a stash via `git stash show --name-status <ref>`.
+func StashShowFiles(ref string) ([]StashDetailFile, error) {
+	out, err := run("git", "stash", "show", "--name-status", ref)
+	if err != nil {
+		return nil, err
+	}
+	var files []StashDetailFile
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		// Strip similarity score from renames (e.g. "R100" → "R")
+		status := strings.TrimRight(fields[0], "0123456789")
+		path := fields[len(fields)-1]
+		files = append(files, StashDetailFile{Status: status, Path: path})
+	}
+	return files, nil
+}
+
+// StashShowSummary extracts files-changed, insertions, deletions from `git stash show <ref>`.
+func StashShowSummary(ref string) (files, insertions, deletions int, err error) {
+	out, err := run("git", "stash", "show", ref)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	out = strings.TrimSpace(out)
+	lines := strings.Split(out, "\n")
+	if len(lines) == 0 {
+		return 0, 0, 0, nil
+	}
+	last := strings.TrimSpace(lines[len(lines)-1])
+	return parseDiffStatSummary(last)
+}
+
+// parseDiffStatSummary parses the summary line from git diff --stat / git stash show.
+// Format: "N file(s) changed, X insertion(s)(+), Y deletion(s)(-)"
+func parseDiffStatSummary(line string) (files, insertions, deletions int, err error) {
+	parts := strings.Split(line, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if strings.HasPrefix(p, "file") || strings.HasPrefix(p, "1 file") {
+			if n, readErr := fmt.Sscanf(p, "%d file", &files); n == 1 && readErr == nil {
+				continue
+			}
+		}
+		if idx := strings.Index(p, " insertion"); idx >= 0 {
+			if n, readErr := fmt.Sscanf(p[:idx], "%d", &insertions); n == 1 && readErr == nil {
+				continue
+			}
+		}
+		if idx := strings.Index(p, " deletion"); idx >= 0 {
+			if n, readErr := fmt.Sscanf(p[:idx], "%d", &deletions); n == 1 && readErr == nil {
+				continue
+			}
+		}
+	}
+	return files, insertions, deletions, nil
+}
+
 // parseStashDiff runs git diff --name-status between two refs and appends files.
 func parseStashDiff(fromRef, toRef string, staged bool, seen map[string]bool, files *[]FileStatus, filesChanged *int) {
 	out, err := run("git", "diff", "--name-status", fromRef, toRef)
