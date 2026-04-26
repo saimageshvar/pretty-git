@@ -923,7 +923,7 @@ func parseDiffStatSummary(line string) (files, insertions, deletions int, err er
 	parts := strings.Split(line, ",")
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if strings.HasPrefix(p, "file") || strings.HasPrefix(p, "1 file") {
+		if strings.Contains(p, "file") {
 			if n, readErr := fmt.Sscanf(p, "%d file", &files); n == 1 && readErr == nil {
 				continue
 			}
