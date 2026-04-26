@@ -638,7 +638,7 @@ type StashDetail struct {
 	FilesChanged int
 	Insertions   int
 	Deletions    int
-	Files        []FileStatus // files changed in the stash
+	Files        []StashDetailFile
 }
 
 // StashType represents how a stash was created.
@@ -810,59 +810,21 @@ func ListStashes() ([]StashEntry, error) {
 	return entries, nil
 }
 
-// GetStashDetail fetches extended info for a single stash entry using the legacy
-// approach (diff against HEAD). For type-aware detail, use GetStashDetailTyped.
+// GetStashDetail fetches stash detail using native git stash show.
 func GetStashDetail(ref string) (StashDetail, error) {
-	return GetStashDetailTyped(ref, StashTypeUnknown, nil)
-}
-
-// GetStashDetailTyped fetches extended info using the stash type to select the
-// correct diff strategy. Uses only stash-internal commits — never HEAD or
-// current working-tree state — so results are immutable regardless of commits
-// or branch changes.
-func GetStashDetailTyped(ref string, stashType StashType, targetFiles []string) (StashDetail, error) {
-	var files []FileStatus
-	var filesChanged int
-	seen := make(map[string]bool)
-
-	switch stashType {
-	case StashTypeStaged:
-		// Staged: only stash^1 (HEAD-at-time) → stash^2 (index) matters
-		parseStashDiff(ref+"^1", ref+"^2", true, seen, &files, &filesChanged)
-
-	case StashTypeUnstaged:
-		// Unstaged: only stash^2 (index) → stash (WIP) + stash^3 (untracked)
-		parseStashDiff(ref+"^2", ref, false, seen, &files, &filesChanged)
-		stashUntrackedFiles(ref, seen, &files, &filesChanged)
-
-	case StashTypeCustom:
-		// Custom: both diffs, filtered to target files
-		targetSet := make(map[string]bool)
-		for _, f := range targetFiles {
-			targetSet[f] = true
-		}
-		parseStashDiffFiltered(ref+"^1", ref+"^2", true, targetSet, seen, &files, &filesChanged)
-		parseStashDiffFiltered(ref+"^2", ref, false, targetSet, seen, &files, &filesChanged)
-		stashUntrackedFilesFiltered(ref, targetSet, seen, &files, &filesChanged)
-
-	case StashTypeAll:
-		// All: both diffs (everything was stashed)
-		parseStashDiff(ref+"^1", ref+"^2", true, seen, &files, &filesChanged)
-		parseStashDiff(ref+"^2", ref, false, seen, &files, &filesChanged)
-		stashUntrackedFiles(ref, seen, &files, &filesChanged)
-
-	default:
-		// Unknown/old stash: use full WIP diff (stash^1 → stash)
-		parseStashDiff(ref+"^1", ref, false, seen, &files, &filesChanged)
-		stashUntrackedFiles(ref, seen, &files, &filesChanged)
+	files, err := StashShowFiles(ref)
+	if err != nil {
+		return StashDetail{}, err
 	}
-
-	insertions, deletions := computeStashStats(ref, stashType, targetFiles)
-
+	fc, ins, dels, sumErr := StashShowSummary(ref)
+	if sumErr != nil {
+		fc = len(files)
+		ins, dels = 0, 0
+	}
 	return StashDetail{
-		FilesChanged: filesChanged,
-		Insertions:   insertions,
-		Deletions:    deletions,
+		FilesChanged: fc,
+		Insertions:   ins,
+		Deletions:    dels,
 		Files:        files,
 	}, nil
 }

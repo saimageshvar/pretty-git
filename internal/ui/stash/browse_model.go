@@ -169,11 +169,6 @@ func (m BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Remove the dropped entry and re-index
 			if m.cursor < len(m.stashes) {
 				m.stashes = append(m.stashes[:m.cursor], m.stashes[m.cursor+1:]...)
-				// Re-index
-				for i := range m.stashes {
-					m.stashes[i].Index = i
-					m.stashes[i].Ref = fmt.Sprintf("stash@{%d}", i)
-				}
 			}
 			if len(m.stashes) == 0 {
 				m.actionResult = "all stashes cleared"
@@ -506,8 +501,6 @@ func buildBrowseDetailLines(d *git.StashDetail, dw int) []string {
 
 	// Message (ref is already shown in the column header)
 	add("  " + valS(d.Message))
-
-
 	add("")
 
 	// Metadata
@@ -543,9 +536,9 @@ func buildBrowseDetailLines(d *git.StashDetail, dw int) []string {
 	add("")
 	add("  " + dimS("── changes "+strings.Repeat("─", max(0, inner-10))))
 
-	// File list
+	// File list — use StashDetailFile.Status directly
 	for _, f := range d.Files {
-		statusStr := statusColor(f.StatusDisplay())
+		statusStr := statusColor(f.Status)
 		pathStr := dimS(truncateStr(f.Path, inner-6))
 		add("  " + statusStr + "  " + pathStr)
 	}
@@ -609,23 +602,9 @@ func (m BrowseModel) renderConfirmModal() string {
 
 func doLoadBrowseDetail(entry git.StashEntry) tea.Cmd {
 	return func() tea.Msg {
-		d := git.StashDetail{StashEntry: entry}
-		files, err := git.StashShowFiles(entry.Ref)
+		d, err := git.GetStashDetail(entry.Ref)
 		if err == nil {
-			d.Files = make([]git.FileStatus, len(files))
-			for i, f := range files {
-				d.Files[i] = git.FileStatus{
-					Code: f.Status,
-					Path: f.Path,
-				}
-			}
-			d.FilesChanged = len(files)
-		}
-		fc, ins, dels, sumErr := git.StashShowSummary(entry.Ref)
-		if sumErr == nil {
-			d.FilesChanged = fc
-			d.Insertions = ins
-			d.Deletions = dels
+			d.StashEntry = entry
 		}
 		return browseDetailLoadedMsg{ref: entry.Ref, detail: d, err: err}
 	}
