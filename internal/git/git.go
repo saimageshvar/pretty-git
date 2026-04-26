@@ -908,18 +908,19 @@ func StashShowSummary(ref string) (files, insertions, deletions int, err error) 
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	out = strings.TrimSpace(out)
-	lines := strings.Split(out, "\n")
-	if len(lines) == 0 {
+	out = strings.TrimRight(out, "\n")
+	if out == "" {
 		return 0, 0, 0, nil
 	}
+	lines := strings.Split(out, "\n")
 	last := strings.TrimSpace(lines[len(lines)-1])
-	return parseDiffStatSummary(last)
+	f, i, d := parseDiffStatSummary(last)
+	return f, i, d, nil
 }
 
 // parseDiffStatSummary parses the summary line from git diff --stat / git stash show.
 // Format: "N file(s) changed, X insertion(s)(+), Y deletion(s)(-)"
-func parseDiffStatSummary(line string) (files, insertions, deletions int, err error) {
+func parseDiffStatSummary(line string) (files, insertions, deletions int) {
 	parts := strings.Split(line, ",")
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
@@ -939,7 +940,7 @@ func parseDiffStatSummary(line string) (files, insertions, deletions int, err er
 			}
 		}
 	}
-	return files, insertions, deletions, nil
+	return files, insertions, deletions
 }
 
 // parseStashDiff runs git diff --name-status between two refs and appends files.
