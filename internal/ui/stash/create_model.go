@@ -80,16 +80,12 @@ type typeOption struct {
 
 func (m *CreateModel) typeOptions() []typeOption {
 	stagedDisabled := len(m.mmFiles) > 0
-	stagedReason := ""
-	if stagedDisabled {
-		names := strings.Join(m.mmFiles, ", ")
-		stagedReason = fmt.Sprintf("Staged disabled: %d files have changes in both staged and unstaged areas (%s). Use Unstaged changes or All changes instead.", len(m.mmFiles), names)
-	}
+
 	return []typeOption{
 		{"All changes", "staged + unstaged + untracked", m.allCount, false, ""},
 		{"Unstaged changes", "working tree only", m.unstagedCount, false, ""},
 		{"Pick specific files…", "choose individual files", m.allCount, false, ""},
-		{"Staged changes", "index only", m.stagedCount, stagedDisabled, stagedReason},
+		{"Staged changes", "index only", m.stagedCount, stagedDisabled, m.mmWarning},
 	}
 }
 
@@ -132,7 +128,7 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 	for _, f := range files {
 		if len(f.Code) >= 2 &&
 			f.Code[0] != ' ' && f.Code[0] != '?' &&
-			f.Code[1] != ' ' && f.Code != "??" {
+			f.Code[1] != ' ' {
 			mmFiles = append(mmFiles, f.Path)
 		}
 	}
@@ -157,11 +153,8 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(ui.ColorTreeConnector)
 	h.Width = termWidth
 
-	// Start cursor on first option with files
-	startCursor := stashTypeAll // default to "All changes"
-	if staged > 0 {
-		startCursor = 0
-	}
+	// Start cursor on first option (All changes)
+	startCursor := 0
 
 	// Custom mode starts with nothing selected — user must explicitly pick files.
 	allSelected := make([]bool, len(files))
@@ -250,7 +243,7 @@ func (m CreateModel) updateLeftPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if opts[i].disabled {
 				continue
 			}
-			if i == stashTypeCustom || opts[i].count > 0 || true {
+			if i == stashTypeCustom || opts[i].count > 0 {
 				m.typeCursor = i
 				break
 			}
@@ -261,7 +254,7 @@ func (m CreateModel) updateLeftPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if opts[i].disabled {
 				continue
 			}
-			if i == stashTypeCustom || opts[i].count > 0 || true {
+			if i == stashTypeCustom || opts[i].count > 0 {
 				m.typeCursor = i
 				break
 			}
