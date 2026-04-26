@@ -43,8 +43,8 @@ type CreateModel struct {
 	unstagedCount  int
 	allCount       int
 	rightPaneFocus bool // true when right pane (file list / preview) has focus
-	mmFiles        []string // files with both staged and unstaged changes
-	mmWarning      string   // warning text when MM files exist
+	mmFiles          []string // files with both staged and unstaged changes
+	mmWarningLines   []string // multi-line warning text when MM files exist
 
 	// Right pane — file list (custom) or preview scroll (other types)
 	fileCursor   int
@@ -79,13 +79,13 @@ type typeOption struct {
 }
 
 func (m *CreateModel) typeOptions() []typeOption {
-	stagedDisabled := len(m.mmFiles) > 0
+	mmDisabled := len(m.mmFiles) > 0
 
 	return []typeOption{
 		{"All changes", "staged + unstaged + untracked", m.allCount, false, ""},
-		{"Unstaged changes", "working tree only", m.unstagedCount, false, ""},
+		{"Unstaged changes", "working tree only", m.unstagedCount, mmDisabled, ""},
 		{"Pick specific files…", "choose individual files", m.allCount, false, ""},
-		{"Staged changes", "index only", m.stagedCount, stagedDisabled, m.mmWarning},
+		{"Staged changes", "index only", m.stagedCount, mmDisabled, ""},
 	}
 }
 
@@ -122,9 +122,11 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 	unstaged := git.CountUnstagedFiles(files)
 	all := len(files)
 
-	// Detect MM files for staged-stash warning
+	// Detect MM files — both staged and unstaged changes on the same file.
+	// When MM files exist, "Staged" and "Unstaged" options are disabled because
+	// neither can cleanly separate the changes.
 	var mmFiles []string
-	var mmWarning string
+	var mmWarningLines []string
 	for _, f := range files {
 		if len(f.Code) >= 2 &&
 			f.Code[0] != ' ' && f.Code[0] != '?' &&
@@ -133,8 +135,16 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 		}
 	}
 	if len(mmFiles) > 0 {
+		// Build short, multi-line warning that fits the left pane
 		names := strings.Join(mmFiles, ", ")
-		mmWarning = fmt.Sprintf("Staged disabled: %d files have changes in both staged and unstaged areas (%s). Use Unstaged changes or All changes instead.", len(mmFiles), names)
+		if len(names) > 30 {
+			names = names[:27] + "…"
+		}
+		mmWarningLines = append(mmWarningLines,
+			fmt.Sprintf("↳ %d MM file(s): %s", len(mmFiles), names),
+			"  Staged & Unstaged disabled.",
+			"  Use All changes instead.",
+		)
 	}
 
 	ti := textinput.New()
@@ -167,7 +177,7 @@ func NewCreate(files []git.FileStatus, repoName string, termWidth, termHeight in
 		unstagedCount: unstaged,
 		allCount:      all,
 		mmFiles:       mmFiles,
-		mmWarning:     mmWarning,
+		mmWarningLines: mmWarningLines,
 		fileSelected:  allSelected,
 		msgInput:      ti,
 		defaultMsg:    git.LastCommitOneLiner(),
@@ -397,17 +407,23 @@ func (m *CreateModel) doStash() tea.Cmd {
 			stashTypeStr = "custom"
 		}
 
-		// Collect custom file paths
-		var customFiles []string
+		// Collect file paths for unstaged and custom stash types
+		var stashFiles []string
 		if m.stashType == stashTypeCustom {
 			for i, f := range m.files {
 				if i < len(m.fileSelected) && m.fileSelected[i] {
-					customFiles = append(customFiles, f.Path)
+					stashFiles = append(stashFiles, f.Path)
+				}
+			}
+		} else if m.stashType == stashTypeUnstaged {
+			for _, f := range m.files {
+				if len(f.Code) > 1 && f.Code[1] != ' ' && f.Code != "??" {
+					stashFiles = append(stashFiles, f.Path)
 				}
 			}
 		}
 
-		result, err := git.StashPush(userMsg, stashTypeStr, customFiles)
+		result, err := git.StashPush(userMsg, stashTypeStr, stashFiles)
 		return stashDoneMsg{err: err, msg: result}
 	}
 }
@@ -543,10 +559,12 @@ func (m CreateModel) viewTypeSelect() string {
 		leftRows = append(leftRows, row)
 	}
 
-	if m.mmWarning != "" {
+	if len(m.mmWarningLines) > 0 {
 		leftRows = append(leftRows, padToLW(""))
 		warningS := lipgloss.NewStyle().Foreground(ui.ColorWarning).Italic(true)
-		leftRows = append(leftRows, padToLW("  "+warningS.Render("↳ "+m.mmWarning)))
+		for _, line := range m.mmWarningLines {
+			leftRows = append(leftRows, padToLW("  "+warningS.Render(line)))
+		}
 	}
 
 	leftRows = append(leftRows, strings.Repeat(" ", lw)) // trailing blank

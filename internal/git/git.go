@@ -836,7 +836,10 @@ func StashPush(msg, stashType string, customFiles []string) (string, error) {
 	case "staged":
 		args = []string{"stash", "push", "--staged", "-m", msg}
 	case "unstaged":
-		args = []string{"stash", "push", "--keep-index", "-m", msg}
+		if len(customFiles) == 0 {
+			return "", fmt.Errorf("no unstaged files to stash")
+		}
+		args = append([]string{"stash", "push", "-m", msg, "--"}, customFiles...)
 	case "custom":
 		if len(customFiles) == 0 {
 			return "", fmt.Errorf("no files selected for custom stash")

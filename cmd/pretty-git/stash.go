@@ -64,6 +64,15 @@ func runStash(args []string) {
 	case "--unstaged":
 		stashType = "unstaged"
 		msgArgs = args[1:]
+		// Collect unstaged file paths for path-based stash
+		ufiles, uerr := git.ListModifiedFiles()
+		if uerr == nil {
+			for _, f := range ufiles {
+				if len(f.Code) > 1 && f.Code[1] != ' ' && f.Code != "??" {
+					customFiles = append(customFiles, f.Path)
+				}
+			}
+		}
 	case "--custom":
 		// pgit stash --custom "msg" -- file1 file2 ...
 		stashType = "custom"
