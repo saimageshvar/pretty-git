@@ -21,6 +21,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  checkout                  browse & switch branches")
 		fmt.Fprintln(os.Stderr, "  checkout <name>           switch to branch (create if missing)")
 		fmt.Fprintln(os.Stderr, "  checkout -b [name]        create new branch")
+		fmt.Fprintln(os.Stderr, "  list                      print branch tree (piped to pager)")
 		fmt.Fprintln(os.Stderr, "  log                       browse commit log")
 		fmt.Fprintln(os.Stderr, "  merge                     pick & merge a branch")
 		os.Exit(1)
@@ -40,10 +41,10 @@ func main() {
 		runWithUpdate("log", runLog)
 	case "merge":
 		runWithUpdate("merge", runMerge)
+	case "list":
+		runWithUpdate("list", runList)
 	case "prompt":
 		runWithUpdate("prompt", func() { runPrompt(os.Args[2:]) })
-	case "stash":
-		runWithUpdate("stash", func() { runStash(os.Args[2:]) })
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)

@@ -78,6 +78,26 @@ When all three of `-b`, `-p`, and `-d` are provided the branch is created immedi
 
 ---
 
+## pgit list
+
+Print the branch tree to the terminal, piped through your default pager (`less` by default).
+
+```bash
+pgit list
+```
+
+### What you see
+
+A tree view of all local branches showing:
+- **Parent-child relationships** — branches nested under their parent with `├─` and `└─` connectors
+- **Current branch** — marked with ★
+- **Description** — if set via `pgit branch` (Ctrl+E) or `pgit checkout -b`
+- **Parent status** — `✓ merged`, `↑N` ahead, or `↑N ↓M` diverged
+
+Output is piped through `less -FR` (respects `$PAGER` if set).
+
+---
+
 ## pgit log
 
 Browse commit history with an inline detail pane.
@@ -111,68 +131,6 @@ Press `f` to reveal the filter bar. Toggle with Space:
 
 - **My commits** — show only commits by your git user email
 - **Skip merges** — hide merge commits
-
----
-
-## pgit stash
-
-Full stash lifecycle — create, browse, apply, pop, and drop.
-
-### Create wizard
-
-```bash
-pgit stash
-```
-
-A three-phase wizard:
-
-**Phase 1 — Choose what to stash:**
-
-| Option | What gets stashed |
-|--------|-------------------|
-| Staged | Only staged changes (`git stash --staged`) |
-| Unstaged | Only unstaged changes |
-| All | Everything (staged + unstaged) |
-| Custom | Select individual files from a list |
-
-Use `↑/↓` to pick, `Space` to toggle files in Custom mode, `a` to select all, `n` to deselect all.
-
-**Phase 2 — Enter a message.**
-The stash is automatically prefixed with the short hash of the last commit.
-
-**Phase 3 — Spinner while the stash is created.**
-
-### Quick stash (no TUI)
-
-When you already know what you want:
-
-```bash
-pgit stash "saving work"                              # stash all changes
-pgit stash --staged "UI tweak"                        # staged only
-pgit stash --unstaged "WIP"                           # unstaged only
-pgit stash --custom "partial" -- src/a.go src/b.go   # specific files
-```
-
-### Browse modes
-
-```bash
-pgit stash apply    # browse and apply a stash (stash is kept)
-pgit stash list     # same as apply
-pgit stash pop      # browse and pop a stash (asks for confirmation)
-pgit stash drop     # browse and drop a stash (asks for confirmation)
-```
-
-All browse modes show a list on the left and a file-change detail pane on the right.
-
-**Keys in browse mode:**
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Navigate list |
-| `→` / `←` | Open / close detail pane |
-| `Enter` | Apply / pop / drop selected stash |
-| `y` | Confirm destructive action (pop / drop) |
-| `q` or `Ctrl+C` | Quit |
 
 ---
 
